@@ -17,3 +17,9 @@
 ## Initial ideas
 - Use price calendar to fetch high-demand/fully booked periods
 - Use price calendar to get view of all room types available
+
+## Scraper Script
+property_page_scraper.py
+
+- Retrieves cookies modal on the first run:
+[opened_element_000.html](../../saved_dom/full_page_after_click_000.html)
