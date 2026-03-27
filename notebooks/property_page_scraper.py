@@ -1,14 +1,15 @@
 import logging
 import random
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import TypedDict
 
 from playwright.sync_api import Locator, Page, Playwright, sync_playwright
 
 
-SAVE_DIR = Path("saved_dom")
-SAVE_DIR.mkdir(exist_ok=True)
+SAVE_ROOT = Path("saved_dom")
+RUN_DIR: Path | None = None
 
 COMMON_OPENED_SELECTORS: list[str] = [
 '[role="dialog"]',
@@ -38,7 +39,20 @@ class VisibleCandidate(TypedDict):
     outer_html: str
 
 
-def setup_logging()-> None:
+def create_run_dir() -> Path:
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    run_dir = SAVE_ROOT / "runs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=False)
+    return run_dir
+
+
+def get_run_dir() -> Path:
+    if RUN_DIR is None:
+        raise RuntimeError("RUN_DIR is not initialized. Call main() first.")
+    return RUN_DIR
+
+
+def setup_logging(log_path: Path) -> None:
     logging.basicConfig(
         level=logging.INFO,
 
@@ -46,7 +60,7 @@ def setup_logging()-> None:
 
         handlers=[
             logging.StreamHandler(),
-            logging.FileHandler("scrape_debug.log",
+            logging.FileHandler(log_path,
                                  encoding="utf-8"),
         ],
         )
@@ -169,12 +183,12 @@ def save_element_dom(element: Locator, filename_prefix: str = "opened") -> Path 
         logging.error("Could not save element DOM because outerHTML extraction failed")
         return None
 
-    filepath = SAVE_DIR / f"{filename_prefix}.html"
+    filepath = get_run_dir() / f"{filename_prefix}.html"
     return save_text_file(outer_html, filepath)
 
 
 def save_full_page_dom(page: Page, filename: str = "full_page_after_click.html") -> Path:
-    filepath = SAVE_DIR / filename
+    filepath = get_run_dir() / filename
     return save_text_file(page.content(), filepath)
 
 
@@ -303,7 +317,10 @@ def run(playwright: Playwright) -> None:
 
 
 def main() -> None:
-    setup_logging()
+    global RUN_DIR
+    RUN_DIR = create_run_dir()
+    setup_logging(RUN_DIR / "scrape_debug.log")
+    logging.info("Run output directory: %s", RUN_DIR)
     logging.info("Starting scraper")
 
     with sync_playwright() as playwright:

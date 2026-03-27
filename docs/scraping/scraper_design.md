@@ -23,3 +23,8 @@ property_page_scraper.py
 
 - Retrieves cookies modal on the first run:
 [opened_element_000.html](../../saved_dom/full_page_after_click_000.html)
+    - Need to accept/reject cookies at startup, contained in:
+        id="onetrust-banner-sdk"
+- Room type container seems to have same class accross sessions and properties
+
+- Check in and checkout dates with "&checkin=2026-04-02&checkout=2026-04-05" in url
