@@ -14,6 +14,11 @@
     - Fairly reliable availability, sometimes no prices but still available
 - Will be extremely complex to scrape undiscounted price reliably as these only appear when a date range is selecte
 - Price calendar shows 1 price only per day, cant differentiate between different room types
+
+### All Listings Page
+-The class value associated with the box containing listing links never seems to change, always is "bd77474a8e" in e.g. in the html file [listings_chania.html](../../data/sample/raw_html/listings_chania.html)
+
+
 ## Initial ideas
 - Use price calendar to fetch high-demand/fully booked periods
 - Use price calendar to get view of all room types available
