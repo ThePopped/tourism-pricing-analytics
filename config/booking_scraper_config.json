@@ -1,0 +1,54 @@
+{
+  "seed": 10001,
+  "output_root": "saved_dom",
+  "lead_times": [1, 7, 14, 30, 60],
+  "stay_lengths": [4, 7, 14],
+  "browser": {
+    "headless": false,
+    "slow_mo_ms": 75,
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "viewport": {
+      "width": 1280,
+      "height": 900
+    }
+  },
+  "default_search": {
+    "group_adults": 2,
+    "group_children": 0,
+    "no_rooms": 1
+  },
+  "timeouts_ms": {
+    "opened_scan_wait_ms": 1500,
+    "final_wait_ms": 3000
+  },
+  "scroll": {
+    "rounds": 2,
+    "min_delta": 120,
+    "max_delta": 450
+  },
+  "common_opened_selectors": [
+    "[role=\"dialog\"]",
+    "[aria-modal=\"true\"]",
+    ".modal",
+    ".popup",
+    ".popover",
+    ".drawer",
+    ".panel",
+    ".overlay",
+    ".lightbox",
+    "[class*=\"modal\"]",
+    "[class*=\"popup\"]",
+    "[class*=\"drawer\"]",
+    "[class*=\"overlay\"]"
+  ],
+  "properties": [
+    {
+      "name": "Solimar Aquamarine Resort",
+      "url": "https://www.booking.com/hotel/gr/solimar-aquamarine-platanias-chania.en-gb.html"
+    },
+    {
+      "name": "Elia Daliani",
+      "url": "https://www.booking.com/hotel/gr/elia-suites.en-gb.html"
+    }
+  ]
+}

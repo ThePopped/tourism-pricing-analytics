@@ -1,59 +1,188 @@
 # Scraper Design Notes
-## Core Tasks
-- Scrapes daily
-- Scrape each property type per property description page e.g. small bedroom and large bedroom
-    - ~~This is possibly too complex since it'll require interacting with price calendar over multiple date ranges~~
-    - Might be able to use URL parameters
-- Scrape price data for 5 future points:
-    immediate (for that day), short, medium and long term
 
-## Observations
-- Discount price is not displayed when viewing listing page without dates selected. Prices shown in price calendar dropdown do not apply discount. Only after selecting dates under availablity do discounted prices appear.
-- **Price Calendar** on listing page shows:
-    - Unreliable price
-    - Fairly reliable availability, sometimes no prices but still available
-- Will be extremely complex to scrape undiscounted price reliably as these only appear when a date range is selecte
-- Price calendar shows 1 price only per day, cant differentiate between different room types
+## Goal
 
-### All Listings Page
--The class value associated with the box containing listing links never seems to change, always is "bd77474a8e" in e.g. in the html file [listings_chania.html](../../data/sample/raw_html/listings_chania.html)
+Build a Booking.com scraper that can:
 
+1. Discover a stable room inventory for each property
+2. Scrape date-specific prices for each room type
+3. Repeat the price scrape across a configurable set of lead times and stay lengths
 
-## Initial ideas
-- Use price calendar to fetch high-demand/fully booked periods
-- Use price calendar to get view of all room types available
+## Confirmed Live Findings
 
-## Scraper Script
-property_page_scraper.py
+These observations were re-checked on 2026-06-03 using Playwright MCP against live Booking.com pages.
 
-- Retrieves cookies modal on the first run:
-[opened_element_000.html](../../saved_dom/full_page_after_click_000.html)
-    - Need to accept/reject cookies at startup, contained in:
-        id="onetrust-banner-sdk"
-- Room type container seems to have same class accross sessions and properties
+### Undated Property Page
 
-- Check in and checkout dates with "&checkin=2026-04-02&checkout=2026-04-05" in url
+- Property pages without `checkin` and `checkout` parameters expose room inventory but not usable prices.
+- The room inventory is visible in the availability table even when prices are hidden.
+- Room type anchors are exposed as `a[href^="#RD"]`.
+- On `Solimar Aquamarine Resort`, the undated page exposed five room types:
+  - `Superior Double Room with Private Pool`
+  - `Superior Double or Twin Room`
+  - `Junior Suite`
+  - `Superior Suite with Private Pool`
+  - `Junior Suite with Private Pool`
+- Clicking `Show prices` on an undated page triggers a browser alert asking for check-in and check-out dates.
 
-## Scrape Flow
-1) **First Loop: Fetch available properties**. The point of this is not to get prices, just to see the full range of available room types. This is because room types will variably be missing from the property listing, depending on whether its fully booked in the period.
-    - For each property, scrape the property listing page with no dates selected.
-    - No prices shown, but will show all room types.
-    - This does not need to be daily, since room types are unlikely to change daily.
-    - DB table 
-2) **Second Loop: Fetch prices**. Now the aim is to get prices. This will require an inner loop over a list of timeframes. So, we will get for each room type and for each timeframe, a price. I will need to decide on the lead times of the time frame (how far in advance the prospective booking is) and the timeframe lengths.
-    - For each (property, room type, timeframe), fetch the total price.
-    - This should be daily
-    - prices should be normalised based on timeframe length (price per night) to be comparable
-    - number of iterations: e.g.
-    
-    ```python
-    property_count = 100
-    room_types = 3 # avg, depends on listings, not me
-    lead_times = 5 # e.g. [1, 7, 14, 30, 60]
-    timeframe_length_count = 3 # e.g. [4, 7, 14]
-    assert property_count * room_types * lead_times * timeframe_length_count == 4500
-    ```
-    - Assuming 1 minute per page, 4500 mins for all pages, = 1hr15 if syncronous
-    - Now that dates are selected, prices will be shown, in addition to discounts (if any)
-    -
+### Dated Property Page
 
+- Adding URL parameters such as `?checkin=2026-07-03&checkout=2026-07-06&group_adults=2&no_rooms=1&group_children=0` changes the page into the usable pricing state.
+- In that state, Booking.com renders a structured room/rate table rather than requiring calendar interaction.
+- Each rate row can be scraped from the DOM.
+
+### Cookies
+
+- A cookie consent modal appears on first load and blocks interaction.
+- The scraper should dismiss this at startup before any page parsing or clicking.
+
+### Search Results Page
+
+- Search result title links were still exposed with class `bd77474a8e` during the live check.
+- This remains a viable starting point for property discovery.
+
+## Confirmed DOM Patterns
+
+### Search Results
+
+- Property title link: `.bd77474a8e`
+- The element itself is an anchor to the property page.
+
+### Undated Property Page
+
+- Room type links: `a[href^="#RD"]`
+- The visible room inventory is present in the availability table even with no date selection.
+- Clicking a `Show prices` button with no dates selected is not useful for scraping and should be avoided.
+
+### Dated Property Page
+
+- Rate rows: `tr.js-rt-block-row`
+- Room cell on the first row of a room group:
+  - `th.hprt-table-cell-roomtype`
+  - room link: `.hprt-roomtype-link`
+  - room id attribute: `data-room-id`
+- Row-level metadata:
+  - block id: `data-block-id`
+  - rounded price: `data-hotel-rounded-price`
+- Current price:
+  - `.bui-price-display__value`
+- Original price when discounted:
+  - `.bui-price-display__original`
+- Rate conditions:
+  - `.hprt-table-cell-conditions`
+- Quantity selector:
+  - `select option`
+
+## Scrape Strategy
+
+### Loop 1: Room Inventory
+
+Purpose:
+- Capture the full set of room types per property
+
+Approach:
+- Visit the property page with no `checkin` and `checkout`
+- Parse `a[href^="#RD"]` and the room inventory table
+- Save:
+  - property identifier
+  - room name
+  - room id
+  - capture timestamp
+
+Why this loop exists:
+- Some room types disappear from dated pages when sold out
+- The undated page gives a better room-type catalog
+- This loop does not need to run daily unless property structure changes
+
+### Loop 2: Price Collection
+
+Purpose:
+- Capture bookable prices for each property across target future stay windows
+
+Approach:
+- Build dated property URLs directly using query parameters
+- Avoid calendar clicking
+- For each `(property, lead_time, stay_length)` combination:
+  - compute `checkin`
+  - compute `checkout`
+  - load the dated property page
+  - parse the rate table
+  - map each rate row back to a room id / room name
+
+Recommended output fields:
+- property url
+- property name
+- scrape timestamp
+- checkin date
+- checkout date
+- stay length
+- room id
+- room name
+- block id
+- rate conditions text
+- current total price
+- original total price if present
+- rounded price attribute
+- price per night
+- occupancy text if present
+- scarcity text if present
+
+## Data Interpretation Notes
+
+- The dated page exposes total price for the stay, not just a nightly rate.
+- Prices should be normalized to price per night for cross-window comparison.
+- A room can have multiple rate rows:
+  - non-refundable
+  - free cancellation
+  - breakfast included
+  - other board / package variants
+- The scraper should keep rate rows separate rather than collapsing them too early.
+
+## Worked Examples From Live Checks
+
+### Solimar Aquamarine Resort
+
+URL pattern used:
+- `checkin=2026-07-03`
+- `checkout=2026-07-06`
+
+Observed:
+- Undated page exposed five room types
+- Dated page exposed structured rows with:
+  - `data-room-id`
+  - `data-block-id`
+  - current price
+  - original price where discounted
+  - rate conditions
+  - quantity options
+
+### Elia Daliani
+
+URL pattern used:
+- `checkin=2026-07-03`
+- `checkout=2026-07-06`
+
+Observed:
+- Dated page used the same `tr.js-rt-block-row` pattern
+- Conditions differed by breakfast inclusion and cancellation policy
+- This is a good sign that the dated-page row parser can generalize
+
+## Risks And Open Points
+
+- Property URL normalization may need care. Some direct slugs can behave differently from search-result links, so the scraper should preserve canonical property URLs collected from Booking.com rather than guessing them.
+- Search-result and property-page class names may change, so selectors should prefer semantic structure and data attributes where available.
+- Rate rows represent commercial products, not only room types. One room id can map to several rate blocks.
+- Some properties may require different occupancy handling, especially if max occupancy and default search occupancy differ.
+
+## Scale Estimate
+
+```python
+property_count = 100
+room_types = 3
+lead_times = 5
+stay_length_count = 3
+
+assert property_count * room_types * lead_times * stay_length_count == 4500
+```
+
+The current scrape design should treat 4,500 as the rough order of magnitude for daily price collection, while keeping the room inventory loop on a slower cadence.
