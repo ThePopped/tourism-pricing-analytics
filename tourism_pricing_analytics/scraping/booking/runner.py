@@ -295,7 +295,7 @@ def run_price_loop(
                         stay_length_days=stay_length_days,
                         captured_at=captured_at,
                     )
-                except Exception:
+                except Exception as exc:
                     logging.exception(
                         "Price extraction failed for %s, lead_time=%d, stay_length=%d",
                         target.name,
