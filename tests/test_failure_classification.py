@@ -1,9 +1,11 @@
 import unittest
+from pathlib import Path
 
 from tourism_pricing_analytics.scraping.booking.failures import classify_page_failure
 
 
 REQUESTED_URL = "https://www.booking.com/hotel/gr/example.en-gb.html?checkin=2026-07-04"
+FIXTURE_DIR = Path(__file__).resolve().parents[1] / "data" / "sample" / "raw_html"
 
 
 def padded_html(body_text: str) -> str:
@@ -42,6 +44,23 @@ class FailureClassificationTests(unittest.TestCase):
             final_url=REQUESTED_URL,
             requested_url=REQUESTED_URL,
             expected_selector_count=0,
+            status_code=200,
+        )
+
+        self.assertIsNotNone(classification)
+        self.assertEqual(classification.category, "empty_availability")
+
+    def test_classifies_empty_availability_fixture(self) -> None:
+        html = (FIXTURE_DIR / "elia_daliani_empty_availability.html").read_text(
+            encoding="utf-8"
+        )
+
+        classification = classify_page_failure(
+            html,
+            final_url=REQUESTED_URL,
+            requested_url=REQUESTED_URL,
+            expected_selector_count=0,
+            fallback_selector_count=2,
             status_code=200,
         )
 
