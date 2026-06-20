@@ -15,8 +15,13 @@
 - Updated scraper runner output to write run-level and per-property `failures.jsonl` files, and to name debug DOM snapshots with the failure category.
 - Updated package exports so failure helpers and failure records remain available through the compatibility import path.
 - Added `tests/test_failure_classification.py` for failure-classification regression coverage.
+- Ran rigorous live validation against the configured 2-property scrape matrix.
+- Fixed a live-discovered classification bug where generic Booking.com error text in page content could override real empty-availability evidence.
+- Updated failure classification to ignore `script`, `style`, and `noscript` text and to classify HTTP 5xx responses as temporary Booking.com errors.
+- Added regression tests so empty availability wins over generic error text and script-only temporary-error strings do not cause false positives.
 - Updated `AGENTS.md` and `CLAUDE.md` to require regular git commits at logical milestones.
 - Updated `AGENTS.md` and `CLAUDE.md` to require a full rigorous test sweep after each completed plan phase before starting the next phase. The documented sweep must go beyond smoke tests and include complete relevant unit tests, compile checks, fixture/parser tests, serialization checks, and rigorous live scraper validation where needed.
+- Removed `changes_applied.md`; commits and PRs are now the change history, with `session_notes.md` reserved for requested handoffs.
 
 ## Current Package Structure
 
@@ -36,25 +41,48 @@
 - `python -m unittest discover -s tests`
 - `python -m py_compile notebooks\property_page_scraper.py config.py tourism_pricing_analytics\scraping\booking\models.py tourism_pricing_analytics\scraping\booking\config.py tourism_pricing_analytics\scraping\booking\urls.py tourism_pricing_analytics\scraping\booking\parsing.py tourism_pricing_analytics\scraping\booking\failures.py tourism_pricing_analytics\scraping\booking\io.py tourism_pricing_analytics\scraping\booking\browser.py tourism_pricing_analytics\scraping\booking\runner.py tourism_pricing_analytics\scraping\booking\__init__.py`
 - `python -c "from notebooks.property_page_scraper import normalize_price_text; print(normalize_price_text('EUR 1,095'))"`
+- `python notebooks\property_page_scraper.py`
 
-Latest full test run passed: `python -m unittest discover -s tests` ran 24 tests OK.
+Latest full local test run passed: `python -m unittest discover -s tests` ran 26 tests OK.
+
+Latest rigorous live validation output:
+
+- Run directory: `saved_dom/runs/20260620_180133_503012`
+- Room inventory records: 7
+- Price row records: 82
+- Failure records: 17
+- Failure categories: 17 `empty_availability`
+- Duplicate inventory records: 0
+- Missing inventory fields: 0
+- Missing price dates: 0
+- Missing price room ids: 0
+- Nonpositive prices: 0
+- Bad per-night calculations: 0
+- Missing failure snapshots: 0
+- Log scan found no `ERROR`, `Traceback`, `exception`, or `failed` matches.
+
+## Commits
+
+- `fc1168a Add structured Booking scraper package`
+- `4970564 Document commit and testing discipline`
+
+The worktree was clean immediately after these commits.
 
 ## What Remains
 
 - Declare runtime and development dependencies in `pyproject.toml`.
 - Decide a retention policy for generated scrape outputs under `saved_dom/runs/`.
-- Run a rigorous live scraper validation against configured properties and date windows now that structured failure categories are in place.
-- Review live `failures.jsonl` output and category-specific DOM snapshots after the first rigorous live validation.
-- Add regression tests for any new scraped-output or failure-classification bugs found during live validation.
-- Consider updating `docs/scraping/next_pass_refactor_plan.md` so it matches the current package structure and the new rigorous phase-completion test policy.
+- Review whether `docs/scraping/next_pass_refactor_plan.md` should be updated again to replace remaining smoke-test language with the stricter rigorous phase-completion test policy.
+- Add more representative Booking.com fixture pages for additional parser and failure-classification edge cases.
+- Consider promoting a small empty-availability HTML sample from live output into `data/sample/raw_html/` for durable fixture coverage, while avoiding large generated artifact commits.
 
 ## Known Issues
 
-- Structured failure categories are implemented, but they still need validation against fresh live Booking.com pages.
+- Dependency declarations remain minimal in `pyproject.toml`.
 - Some generated scrape outputs may be useful for debugging, but large run artifacts should not become normal committed assets.
 - The current dated fixture is useful and real, but broader parser coverage will still need more representative Booking.com edge cases over time.
-- Dependency declarations remain minimal in `pyproject.toml`.
+- Live Booking.com DOM and availability behavior can change, so category heuristics should keep getting regression tests when new live cases appear.
 
 ## Next Recommended Step
 
-Perform the required full rigorous test sweep for the completed structured-failure phase, including live scraper validation, then review the generated `failures.jsonl`, successful JSONL outputs, logs, and category-specific DOM snapshots before committing the phase.
+Declare runtime and development dependencies in `pyproject.toml`, then run the required rigorous sweep for that phase before committing.
