@@ -1,0 +1,112 @@
+import unittest
+from datetime import date
+from urllib.parse import parse_qs, urlsplit
+
+from config import ROOT
+from tourism_pricing_analytics.scraping.booking.config import load_scraper_config
+from tourism_pricing_analytics.scraping.booking.models import DefaultSearchConfig
+from tourism_pricing_analytics.scraping.booking.urls import (
+    build_date_window,
+    build_dated_url,
+    build_property_url,
+    build_room_inventory_url,
+    canonicalize_property_url,
+)
+
+
+class ScraperConfigAndUrlTests(unittest.TestCase):
+    def test_load_scraper_config_resolves_relative_output_under_repo(self) -> None:
+        scraper_config = load_scraper_config()
+
+        self.assertTrue(scraper_config.properties)
+        self.assertTrue(scraper_config.output_root.is_absolute())
+        self.assertEqual(scraper_config.output_root, ROOT / "saved_dom")
+        self.assertEqual(scraper_config.seed, 10001)
+
+    def test_load_scraper_config_reads_expected_search_settings(self) -> None:
+        scraper_config = load_scraper_config()
+
+        self.assertEqual(scraper_config.default_search.group_adults, 2)
+        self.assertEqual(scraper_config.default_search.group_children, 0)
+        self.assertEqual(scraper_config.default_search.no_rooms, 1)
+        self.assertEqual(scraper_config.lead_times, [1, 7, 14, 30, 60])
+        self.assertEqual(scraper_config.stay_lengths, [4, 7, 14])
+
+    def test_build_date_window_uses_fixed_base_date_offsets(self) -> None:
+        checkin, checkout = build_date_window(
+            lead_time_days=14,
+            stay_length_days=7,
+            base_date=date(2026, 6, 20),
+        )
+
+        self.assertEqual(checkin, date(2026, 7, 4))
+        self.assertEqual(checkout, date(2026, 7, 11))
+
+    def test_canonicalize_property_url_removes_query_and_fragment(self) -> None:
+        canonical_url = canonicalize_property_url(
+            "https://www.booking.com/hotel/gr/example.en-gb.html?checkin=2026-07-04#availability"
+        )
+
+        self.assertEqual(
+            canonical_url,
+            "https://www.booking.com/hotel/gr/example.en-gb.html",
+        )
+
+    def test_build_room_inventory_url_uses_canonical_property_url(self) -> None:
+        inventory_url = build_room_inventory_url(
+            "https://www.booking.com/hotel/gr/example.en-gb.html?checkin=2026-07-04"
+        )
+
+        self.assertEqual(
+            inventory_url,
+            "https://www.booking.com/hotel/gr/example.en-gb.html",
+        )
+
+    def test_build_property_url_adds_updates_and_removes_query_params(self) -> None:
+        property_url = build_property_url(
+            "https://www.booking.com/hotel/gr/example.en-gb.html?checkin=old&keep=yes&remove=1",
+            params={
+                "checkin": "2026-07-04",
+                "checkout": "2026-07-11",
+                "remove": None,
+            },
+        )
+        parsed_url = urlsplit(property_url)
+        query_params = parse_qs(parsed_url.query)
+
+        self.assertEqual(parsed_url.scheme, "https")
+        self.assertEqual(parsed_url.netloc, "www.booking.com")
+        self.assertEqual(parsed_url.path, "/hotel/gr/example.en-gb.html")
+        self.assertEqual(query_params["checkin"], ["2026-07-04"])
+        self.assertEqual(query_params["checkout"], ["2026-07-11"])
+        self.assertEqual(query_params["keep"], ["yes"])
+        self.assertNotIn("remove", query_params)
+
+    def test_build_dated_url_sets_expected_search_params(self) -> None:
+        dated_url = build_dated_url(
+            "https://www.booking.com/hotel/gr/example.en-gb.html?old_param=ignored",
+            checkin=date(2026, 7, 4),
+            checkout=date(2026, 7, 11),
+            default_search=DefaultSearchConfig(
+                group_adults=2,
+                group_children=0,
+                no_rooms=1,
+            ),
+        )
+        parsed_url = urlsplit(dated_url)
+        query_params = parse_qs(parsed_url.query)
+
+        self.assertEqual(
+            f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path}",
+            "https://www.booking.com/hotel/gr/example.en-gb.html",
+        )
+        self.assertEqual(query_params["checkin"], ["2026-07-04"])
+        self.assertEqual(query_params["checkout"], ["2026-07-11"])
+        self.assertEqual(query_params["group_adults"], ["2"])
+        self.assertEqual(query_params["group_children"], ["0"])
+        self.assertEqual(query_params["no_rooms"], ["1"])
+        self.assertNotIn("old_param", query_params)
+
+
+if __name__ == "__main__":
+    unittest.main()

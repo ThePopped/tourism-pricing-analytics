@@ -1,0 +1,1 @@
+"""Tourism pricing analytics package."""
