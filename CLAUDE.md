@@ -16,7 +16,7 @@ The active implementation area is data ingestion and scraper hardening.
 - Scraper docs: `docs/scraping/`
 - Generated scrape output: `saved_dom/runs/<timestamp>/`
 
-The near-term goal is to protect scraper behavior with unit and fixture tests, then migrate reusable scraper logic from the notebook script into package modules.
+The near-term goal is to broaden fixture and data-quality coverage, keep failure classification reliable, and validate live scraper behavior before expanding the property set.
 
 ## Development Standards
 
@@ -36,7 +36,7 @@ The near-term goal is to protect scraper behavior with unit and fixture tests, t
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
-pip install -e .
+pip install -e ".[dev]"
 python -m unittest discover -s tests
 python -m py_compile notebooks\property_page_scraper.py config.py
 python notebooks\property_page_scraper.py
@@ -72,14 +72,15 @@ Classify scraper failures clearly instead of logging all empty results the same 
 
 Before data moves downstream, check for impossible prices, missing date fields, duplicate room inventory records, and null room ids that need review.
 
-## Package Direction
+## Package Structure
 
-`notebooks/property_page_scraper.py` can remain the manual entrypoint for now, but reusable logic should move toward:
+`notebooks/property_page_scraper.py` remains the manual entrypoint. Reusable logic lives in:
 
 - `tourism_pricing_analytics/scraping/booking/models.py`
+- `tourism_pricing_analytics/scraping/booking/config.py`
 - `tourism_pricing_analytics/scraping/booking/urls.py`
-- `tourism_pricing_analytics/scraping/booking/property_inventory.py`
-- `tourism_pricing_analytics/scraping/booking/property_prices.py`
+- `tourism_pricing_analytics/scraping/booking/parsing.py`
+- `tourism_pricing_analytics/scraping/booking/failures.py`
 - `tourism_pricing_analytics/scraping/booking/io.py`
-
-Do this after fixture tests exist, so behavior is protected during the refactor.
+- `tourism_pricing_analytics/scraping/booking/browser.py`
+- `tourism_pricing_analytics/scraping/booking/runner.py`

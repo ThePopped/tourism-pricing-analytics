@@ -8,6 +8,41 @@ Build a Booking.com scraper that can:
 2. Scrape date-specific prices for each room type
 3. Repeat the price scrape across a configurable set of lead times and stay lengths
 
+## Current Implementation Status
+
+The exploratory scraper has been refactored into reusable package modules under
+`tourism_pricing_analytics/scraping/booking/`, with
+`notebooks/property_page_scraper.py` kept as the manual compatibility entrypoint.
+
+Current behavior:
+
+- Loads scraper settings from `config/booking_scraper_config.json`
+- Builds undated room-inventory URLs and dated price URLs directly
+- Writes timestamped JSONL outputs under `saved_dom/runs/<timestamp>/`
+- Writes per-property output directories inside each run directory
+- Classifies failures into machine-readable categories in `failures.jsonl`
+- Saves debug HTML snapshots for empty, failed, or suspicious windows
+- Protects parser, URL, config, failure-classification, and runner failure-recording behavior with `unittest` coverage
+
+## Generated Output Retention Policy
+
+`saved_dom/runs/` is local generated output and is intentionally ignored by Git.
+Keep it useful for debugging, but do not treat it as project history.
+
+Recommended retention:
+
+- Keep the latest successful rigorous validation run until the next validation run passes.
+- Keep any run that exposed an unresolved parser, data-quality, or failure-classification bug.
+- Delete exploratory or superseded run directories once their findings are captured in commits, docs, tests, or small promoted fixtures.
+- Promote only small representative HTML samples to `data/sample/raw_html/` when they protect a parser or failure-classification behavior.
+- Do not commit full generated run directories, credentials, private client data, or large raw Booking.com artifacts.
+
+Before removing a run, confirm any useful evidence has been preserved:
+
+- Regression tests exist for discovered bugs.
+- Small durable fixtures have been promoted when needed.
+- The run summary, if important, is captured in a commit, PR, or requested handoff note.
+
 ## Confirmed Live Findings
 
 These observations were re-checked on 2026-06-03 using Playwright MCP against live Booking.com pages.

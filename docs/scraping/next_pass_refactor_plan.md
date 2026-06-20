@@ -2,7 +2,7 @@
 
 ## Objective
 
-Refactor the current exploratory scraper into a repeatable pipeline that:
+Continue hardening the Booking.com scraper as a repeatable ingestion pipeline that:
 
 1. Discovers candidate Booking.com properties
 2. Captures room inventory from undated property pages
@@ -11,18 +11,26 @@ Refactor the current exploratory scraper into a repeatable pipeline that:
 
 ## Current Starting Point
 
-`notebooks/property_page_scraper.py` is currently a live DOM exploration script. It:
+The scraper is now package-based, with `notebooks/property_page_scraper.py`
+serving as a thin manual entrypoint. Reusable Booking.com logic lives under
+`tourism_pricing_analytics/scraping/booking/`.
 
-- opens one property page
-- scrolls and clicks exploratory controls
-- detects newly opened modals
-- saves DOM snapshots for debugging
+Implemented pieces:
 
-It is useful for reconnaissance, but it is not yet the production-shaped scraper we need.
+- Config loading from `config/booking_scraper_config.json`
+- Direct dated URL construction
+- Undated room-inventory extraction
+- Dated price-row extraction
+- JSONL persistence for room inventory, price rows, and failures
+- Per-property output directories and failure snapshots
+- Explicit failure categories for empty availability, selector drift, redirects, blocked/challenge pages, partial loads, temporary Booking.com errors, navigation errors, and extraction errors
+- Unit and fixture tests for core parser, URL, config, and failure behavior
 
 ## Refactor Direction
 
-The next pass should turn the script from "interaction probe" into "structured extractor".
+Future passes should focus on deeper data correctness, broader fixture coverage,
+output-quality validation, and careful scale-up. Keep browser orchestration,
+parsing, and persistence separate as new behavior is added.
 
 ## Best-Practice Implementation Priorities
 
@@ -31,8 +39,8 @@ Use these priorities to guide implementation order:
 1. Protect current behavior with unit and fixture tests before larger refactors.
 2. Fix data correctness issues before expanding scrape scale.
 3. Keep browser orchestration, parsing, and persistence separate.
-4. Move reusable scraper logic from `notebooks/property_page_scraper.py` into package modules once fixture tests exist.
-5. Declare runtime and development dependencies in `pyproject.toml` as tools are added.
+4. Keep reusable scraper logic in package modules; leave `notebooks/property_page_scraper.py` as a thin manual entrypoint.
+5. Keep runtime and development dependencies declared in `pyproject.toml` as tools are added.
 6. Treat `saved_dom/runs/` as generated output; promote only small representative HTML files to fixtures.
 7. Classify scraper failures explicitly rather than treating every empty result as the same condition.
 
@@ -131,17 +139,17 @@ Goal:
 
 ### Phase 6: Persist Structured Outputs
 
-Recommended first output format:
-- CSV or JSONL in a timestamped run directory
+Recommended output format:
+- JSONL in a timestamped run directory
 
 Suggested files:
-- `room_inventory.csv`
-- `price_rows.csv`
+- `room_inventory.jsonl`
+- `price_rows.jsonl`
+- `failures.jsonl`
 - `scrape_debug.log`
-- optional raw HTML snapshots only on failure
+- optional raw HTML snapshots only on failure, empty availability, or suspicious selector drift
 
 Goal:
-- stop saving every exploratory DOM by default
 - save structured data first, debug artifacts second
 
 ### Phase 7: Improve Error Handling
@@ -176,13 +184,17 @@ Goal:
 
 ## Testing And Acceptance Criteria
 
-Testing should start now, but stay lightweight while Booking.com page behavior is still being explored. The goal is to protect stable internal contracts without overfitting tests to selectors that may change.
+Each completed implementation phase must be followed by a full relevant test
+sweep before the next phase begins. Do not treat a smoke run as sufficient when
+the change can affect parser output, failure handling, serialization, or live
+scrape behavior.
 
 ### Test Levels
 
 1. Unit tests for pure logic
 2. Fixture parser tests using saved HTML snapshots
-3. Manual or live smoke acceptance for a small Booking.com run
+3. Serialization and data-quality checks against structured output
+4. Rigorous live validation for scraper behavior that depends on Booking.com pages
 
 ### Component Test Matrix
 
@@ -196,12 +208,12 @@ Testing should start now, but stay lightweight while Booking.com page behavior i
 | room inventory parser | fixture parser | saved undated property HTML | records include property name/url, non-empty room ids, non-empty room names, and no duplicate room ids |
 | price row parser | fixture parser | saved dated property HTML | records include date window, room mapping where available, block id, raw price text, normalized price, conditions text, and quantity options |
 | serialization | unit | sample room and price records | JSONL output is valid, one record per line, and preserves expected field names |
-| missing or empty availability | fixture parser / smoke | saved empty availability HTML or live empty date window | scraper logs the empty case, saves debug HTML, and continues to the next window |
-| per-property failure handling | unit / smoke | one failing property among valid properties | run continues for later properties and writes whatever valid records were extracted |
+| missing or empty availability | fixture parser / live validation | saved empty availability HTML or live empty date window | scraper logs the empty case, writes `empty_availability`, saves debug HTML, and continues to the next window |
+| per-property failure handling | unit / live validation | one failing property among valid properties | run continues for later properties and writes whatever valid records were extracted |
 
-### Live Smoke Acceptance
+### Live Validation Acceptance
 
-For a small smoke run against 1 to 2 configured properties:
+For a rigorous validation run against the configured small property set:
 
 1. The scraper creates a timestamped run directory.
 2. The run directory contains `scrape_debug.log`, `room_inventory.jsonl`, and `price_rows.jsonl`.
@@ -211,6 +223,8 @@ For a small smoke run against 1 to 2 configured properties:
 6. `price_per_night` equals normalized total price divided by stay length.
 7. Empty availability windows are logged and do not fail the whole run.
 8. The browser closes cleanly and the final log line indicates completion.
+9. `failures.jsonl` exists and every failure has a machine-readable category.
+10. Debug snapshot paths referenced by failure records exist when a snapshot is expected.
 
 ### Data Quality Checks Before Downstream Analytics
 
@@ -223,33 +237,26 @@ Before scraped data is used for clustering, modelling, or dashboarding:
 - price rows preserve raw text fields alongside normalized numeric fields
 - rows with null `room_id` are reviewed separately before modelling
 
-## Suggested File-Level Refactor
-
-### Keep For Now
-
-- `notebooks/property_page_scraper.py`
-
-### Recommended Near-Term Structure
+## Current File-Level Structure
 
 - `notebooks/property_page_scraper.py`
   - thin entrypoint for manual runs
-- `tourism_pricing_analytics/scraping/booking/urls.py`
-- `tourism_pricing_analytics/scraping/booking/property_inventory.py`
-- `tourism_pricing_analytics/scraping/booking/property_prices.py`
 - `tourism_pricing_analytics/scraping/booking/models.py`
+- `tourism_pricing_analytics/scraping/booking/config.py`
+- `tourism_pricing_analytics/scraping/booking/urls.py`
+- `tourism_pricing_analytics/scraping/booking/parsing.py`
+- `tourism_pricing_analytics/scraping/booking/failures.py`
 - `tourism_pricing_analytics/scraping/booking/io.py`
+- `tourism_pricing_analytics/scraping/booking/browser.py`
+- `tourism_pricing_analytics/scraping/booking/runner.py`
 
-Do this after fixture parser tests exist, so behavior is protected during the move.
+## Execution Order For The Next Build Passes
 
-## Execution Order For The Next Build Pass
-
-1. Finish unit tests for stable helpers.
-2. Add fixture parser tests for one undated page and one dated page.
-3. Classify empty/failure cases with explicit categories.
-4. Refactor reusable logic into package modules.
-5. Run both flows against 2 to 5 properties.
-6. Save structured output to disk.
-7. Review gaps in room matching, price normalization, and availability edge cases.
+1. Add more representative fixtures for empty availability, selector drift, and discounted rate rows.
+2. Add structured output validation helpers for run directories.
+3. Promote durable data-quality checks for duplicate inventory records, missing price dates, missing room ids, nonpositive prices, and per-night calculation mismatches.
+4. Run rigorous live validation against the configured small property set.
+5. Review gaps in room matching, price normalization, and availability edge cases before expanding property count.
 
 ## Definition Of Done For The Next Pass
 
@@ -261,9 +268,10 @@ The next pass is successful when we can:
 4. Link each rate row back to a room id / room name
 5. Compute price per night
 6. Handle cookie dismissal and missing-data cases without manual intervention
-7. Pass unit tests for URL/date/price/per-night logic
-8. Pass fixture parser tests for at least one undated property page and one dated property page, once representative fixtures are selected
-9. Complete a 1 to 2 property live smoke run that satisfies the live smoke acceptance criteria above
+7. Pass unit tests for URL/date/price/per-night/failure logic
+8. Pass fixture parser tests for representative undated and dated property pages
+9. Complete live validation that satisfies the acceptance criteria above
+10. Preserve any newly discovered live-output bugs as regression tests before expanding scale
 
 ## Recommended Non-Goals For This Pass
 

@@ -4,7 +4,8 @@
 
 This repository supports tourism pricing analytics for Crete properties, starting with Booking.com scraping.
 
-- `notebooks/property_page_scraper.py`: Playwright scraper entrypoint and parser logic.
+- `notebooks/property_page_scraper.py`: thin Playwright scraper entrypoint.
+- `tourism_pricing_analytics/scraping/booking/`: reusable Booking.com scraping modules for config, URLs, parsing, failure classification, browser orchestration, persistence, and runner logic.
 - `config.py`: repository path constants.
 - `config/booking_scraper_config.json`: scraper seed, browser settings, date windows, occupancy, and property targets.
 - `docs/scraping/`: scraper design notes and refactor plan.
@@ -16,13 +17,13 @@ This repository supports tourism pricing analytics for Crete properties, startin
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
-pip install -e .
+pip install -e ".[dev]"
 python -m unittest discover -s tests
 python -m py_compile notebooks\property_page_scraper.py config.py
 python notebooks\property_page_scraper.py
 ```
 
-Use these to activate the environment, install locally, run tests, compile-check Python, and run the scraper.
+Use these to activate the environment, install locally with development extras, run tests, compile-check Python, and run the scraper.
 
 ## Coding Style & Naming Conventions
 
@@ -36,7 +37,7 @@ After each completed phase of an implementation plan, the next required action i
 
 ## Implementation Priorities
 
-Fix data correctness before scale. Add regression tests for scraped-output bugs. Move reusable scraper logic from `notebooks/` into package modules after fixture tests protect behavior. Treat `saved_dom/runs/` as generated output; promote only small representative HTML files to fixtures.
+Fix data correctness before scale. Add regression tests for scraped-output bugs. Keep reusable scraper logic in package modules and leave `notebooks/property_page_scraper.py` as a thin manual entrypoint. Treat `saved_dom/runs/` as generated output; promote only small representative HTML files to fixtures.
 
 ## Commit & Pull Request Guidelines
 
