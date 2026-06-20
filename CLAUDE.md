@@ -1,85 +1,85 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides implementation guidance for Claude Code and other coding agents working in this repository.
 
 ## Project Purpose
 
-A machine learning pipeline providing pricing analytics for a tourism business in Crete. It scrapes Booking.com daily to build a competitor dataset, then applies two models:
-1. **Clustering** — identifies close competitors based on property features (price, location, amenities, beach/urban distance, room sizes, etc.)
-2. **Hedonic pricing model** (regression) — estimates fair-market benchmark value and interprets which features drive price differences
+This project builds a pricing analytics pipeline for tourism properties in Crete. The current focus is Booking.com ingestion: collect room inventory and dated rate rows, then prepare reliable data for future clustering, hedonic pricing, monitoring, and dashboarding.
 
-The output feeds a daily dashboard for competitive pricing insights.
+## Current Phase
+
+The active implementation area is data ingestion and scraper hardening.
+
+- Current entrypoint: `notebooks/property_page_scraper.py`
+- Config: `config/booking_scraper_config.json`
+- Tests: `tests/`
+- Scraper docs: `docs/scraping/`
+- Generated scrape output: `saved_dom/runs/<timestamp>/`
+
+The near-term goal is to protect scraper behavior with unit and fixture tests, then migrate reusable scraper logic from the notebook script into package modules.
 
 ## Development Standards
 
-- Random seeds: always `10001`
-- Comments: use double-hash format `## This is an example`
-- Document each meaningful change in `changes_applied.md`
-- Follow MLOps best practices for all modeling and pipeline work
+- Use random seed `10001` for reproducible behavior.
+- Keep commits focused and use imperative subjects, for example `Fix price normalization`.
+- Use regular git commits and pull requests as the source of change history. Commit at logical milestones throughout the work, especially after each completed plan phase, instead of waiting until a long session is complete.
+- Add or update tests for parser, config, URL, date, serialization, and data-quality changes.
+- Prefer small deterministic helper functions over large browser-coupled blocks.
+- Declare new runtime or development dependencies in `pyproject.toml`.
+- Do not commit credentials, private client data, or large generated scrape runs.
 
-## Environment Setup
+## Session Notes Policy
+
+`session_notes.md` is a current handoff/status document, not a change log. Update it only when the user requests it. When updating it, replace the file entirely rather than appending to it, while preserving long-term relevant known issues, remaining work, and next recommended steps.
+
+## Environment And Commands
 
 ```powershell
-# Activate virtual environment (Windows)
 .\.venv\Scripts\Activate.ps1
-
-# Install project in editable mode
 pip install -e .
+python -m unittest discover -s tests
+python -m py_compile notebooks\property_page_scraper.py config.py
+python notebooks\property_page_scraper.py
 ```
 
-## Running the Scraper
+When linting or formatting tools are added, document their commands here and in `AGENTS.md`.
 
-The current main script is [notebooks/property_page_scraper.py](notebooks/property_page_scraper.py) (Playwright-based):
+## Scraper Architecture Guidance
 
-```powershell
-python notebooks/property_page_scraper.py
-```
+The scraper should keep three concerns separate:
 
-Output is saved to `saved_dom/runs/<timestamp>/` — includes per-interaction HTML captures and a `scrape_debug.log`.
+1. Browser orchestration: navigation, cookie handling, page loading, retries.
+2. Parsing: pure extraction logic for room inventory and price rows.
+3. Persistence: JSONL/CSV output and debug artifact writing.
 
-## Architecture
+Prefer direct dated URLs over calendar interaction. Keep raw text fields, such as price and rate conditions, alongside normalized numeric values. Preserve Booking identifiers such as `room_id` and `block_id`.
 
-The pipeline is designed in stages (see [README.md](README.md) for the full Mermaid diagram):
+## Testing Guidance
 
-```
-Booking.com → Ingestion (scraper) → Raw Storage → Data Engineering
-→ Feature Pipeline → [Competitor Clustering | Hedonic Model] → Serving → Dashboard
-                                                                       ↑
-                                                            Monitoring & Retraining
-```
+Follow the staged testing plan in `docs/scraping/next_pass_refactor_plan.md`.
 
-### Current Phase: Data Ingestion / Scraping
+- Unit tests first for pure logic: config, date windows, URLs, price parsing, per-night calculation, serialization.
+- Fixture parser tests next using saved undated and dated HTML snapshots.
+- Rigorous live scraper validation last, with output evidence under `saved_dom/runs/`, covering enough configured properties and date windows to verify the system end to end rather than merely confirming that a smoke test starts.
 
-The scraper uses **Playwright** (sync API) with human-like behavior (random pauses, noisy scrolling, mouse movement variance). It detects newly-opened modals by diffing DOM snapshots before/after clicks.
+After each completed phase of an implementation plan, the next required action is a full, rigorous test sweep of the project code before beginning the next phase. Do not skip pieces for speed and do not treat a smoke test as sufficient. Run the complete relevant unit tests, compile checks, fixture/parser tests, serialization checks, and rigorous live scraper validation needed to be absolutely certain everything works thus far. Only commit the completed phase after that full sweep passes.
 
-**Two-loop scrape flow** (see [docs/scraping/scraper_design.md](docs/scraping/scraper_design.md)):
+Any bug found in scraped output should get a regression test before expanding the scrape.
 
-1. **Room type loop** (non-daily): hit each property page with no dates to capture all room types regardless of availability
-2. **Price loop** (daily): for each `(property, room type, lead time, stay length)` tuple, set dates via URL params (`&checkin=YYYY-MM-DD&checkout=YYYY-MM-DD`) and capture discounted prices — normalize to price-per-night
+## Error Handling And Data Quality
 
-Scale estimate: ~4,500 page requests (100 properties × 3 room types × 5 lead times × 3 stay lengths) ≈ 75 min synchronous.
+Classify scraper failures clearly instead of logging all empty results the same way. Use categories such as empty availability, selector drift, redirect, invalid property URL, partial load, blocked page, and temporary Booking.com error. Continue per property/date window where possible, but preserve enough debug HTML to diagnose failures.
 
-### Key Selector Patterns (stable across sessions)
+Before data moves downstream, check for impossible prices, missing date fields, duplicate room inventory records, and null room ids that need review.
 
-- Listing cards on search page: `class="bd77474a8e"`
-- Facilities section: `class="f6b6d2a959"`
-- Room type "Read More" triggers: `href^="#RD"`
-- Modals/overlays: `[role="dialog"]`, `[aria-modal="true"]`
-- Cookies banner: `id="onetrust-banner-sdk"` (must accept/reject on first run)
+## Package Direction
 
-### Configuration
+`notebooks/property_page_scraper.py` can remain the manual entrypoint for now, but reusable logic should move toward:
 
-[config.py](config.py) defines root paths:
-- `ROOT` — repo root
-- `DATA_DIR` — `data/`
-- `RAW_DIR` — `data/sample/raw_html/` (sample HTML for development)
+- `tourism_pricing_analytics/scraping/booking/models.py`
+- `tourism_pricing_analytics/scraping/booking/urls.py`
+- `tourism_pricing_analytics/scraping/booking/property_inventory.py`
+- `tourism_pricing_analytics/scraping/booking/property_prices.py`
+- `tourism_pricing_analytics/scraping/booking/io.py`
 
-### Planned Downstream Stages (not yet implemented)
-
-- Data engineering: schema validation, deduplication, QA
-- Feature pipeline: static and time-varying predictors
-- Clustering model (scikit-learn) for competitor identification
-- Hedonic regression model with experiment tracking and versioning
-- Batch scoring + retraining orchestration
-- Monitoring: data freshness, drift, model degradation
-- Analytics dashboard
+Do this after fixture tests exist, so behavior is protected during the refactor.
