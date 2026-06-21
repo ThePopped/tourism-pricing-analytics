@@ -1,23 +1,37 @@
 # Session Notes
 
+## Active Focus
+
+Work is on branch `feature/room-property-features` (not `main`). The live spec
+for the in-progress work is `docs/scraping/feature_extraction_plan.md` — treat
+it as the source of truth; per-phase detail lives in commits, not here. This
+handoff section is replaced in full at Phase 4 (pre-merge), and `main`'s
+`session_notes.md` is left untouched until then to avoid a merge conflict.
+
+Phase tracker (see the plan for detail):
+
+- [ ] Phase 0 — scaffolding: extractor protocols/registry + new record models + IO (no behavior change)
+- [ ] Phase 1 — Tier B room extractors (size, beds, occupancy, amenities raw list, room class)
+- [ ] Phase 2 — Layer 2 derivation & encoding (seasonality, meal/cancellation, full amenity multi-hot, join)
+- [ ] Phase 3 — Tier C property extractors (rating, reviews+subscores, geo, type, facilities, surroundings, policies, misc)
+- [ ] Phase 4 — live validation + full `session_notes.md` replace
+
+The sections below describe the `main`-branch state this branch started from.
+
 ## Current Status
 
 The Booking.com scraper runs from reusable package modules under `tourism_pricing_analytics/scraping/booking/`, with `notebooks/property_page_scraper.py` as a thin manual entrypoint.
 
 The active project phase is scraper hardening: broaden fixture coverage, validate structured run output and data quality, and keep live Booking.com behavior protected by regression tests before scaling the property set.
 
-This session added structured run-output validation (and wired it into the runner), built a listings-page parser to derive scrape targets reproducibly, and curated a type-diverse seven-property target set.
+This session ran a rigorous live validation scrape against the curated seven-property target set (clean `validation_report.json`), then harvested a real discounted-rate page into a fixture and added parser regression coverage for discounted rates, closing the main open fixture gap.
 
 ## Completed This Session
 
-- Added `tourism_pricing_analytics/scraping/booking/validation.py`: pure, browser-free helpers that validate a completed run directory under `saved_dom/runs/<timestamp>/`. `validate_run_directory` aggregates all issues into a `RunValidationReport`. Checks cover required run files, JSONL one-object-per-line parsing, duplicate `(property_url, room_id)` inventory pairs, missing `room_id`/`room_name`, missing price `checkin`/`checkout`/`stay_length_days`/`captured_at`, nonpositive prices when raw price text is present, `price_per_night == round(current_price_value / stay_length_days, 2)`, populated failure categories, and existence of referenced snapshot files (searched recursively, since snapshots live in per-property subdirectories).
-- Covered the validation helpers with unit tests over synthetic records and temp run directories.
-- Wired post-run validation into `runner.run`: after artifacts are written it calls `validate_and_report_run`, which validates the run directory, writes `validation_report.json`, and logs a pass/fail summary (per-check counts on failure).
-- Added `validation.report_to_dict` / `RunValidationReport.issue_counts_by_check` and `io.save_validation_report` to persist the report, with tests for serialization and the runner pass/fail logging paths.
-- Added `tourism_pricing_analytics/scraping/booking/listings.py`: a pure BeautifulSoup parser for saved Booking.com search-results pages. `parse_listings` yields `ListingCandidate(name, url, price_text, review_score_text, recommended_unit_text)`, dedupes by canonical URL, and preserves listing order. `normalize_listing_url` strips per-session tracking query/fragment to the stable `/hotel/<cc>/<slug>.html` form used in config.
-- Added a small faithful listings fixture `data/sample/raw_html/listings_chania_sample.html` covering tracking-query URLs, a discounted price, missing optional fields, a title-link fallback, and duplicate collapsing, plus unit tests for the parser and URL normalization.
-- Declared `beautifulsoup4>=4.12,<5` as a runtime and dev dependency in `pyproject.toml`.
-- Curated the scrape target set in `config/booking_scraper_config.json` from two ad hoc properties to seven type-diverse ones (resort, boutique hotel, suite, villa, apartment, rooms-type listing, plus the existing Elia Daliani), derived from the listings parser. Solimar Aquamarine was dropped because it is absent from the Chania listings page.
+- Ran a full live validation scrape against the curated seven-property set (`python notebooks/property_page_scraper.py`). Run directory `saved_dom/runs/20260621_115932_254135`: 30 room-inventory records, 316 price rows, 39 failures (all `empty_availability`, expected for sold-out near dates), `validation_report.json` with `is_valid: true`, `issue_count: 0`. All seven configured URLs were reachable end to end.
+- Added `scripts/capture_discounted_fixture.py`: a small one-off helper that reuses the scraper's own browser/navigation/config/IO helpers to fetch a single Selected Suites discounted dated page and save its full DOM as a fixture. Needed because the runner only snapshots HTML on failures, so successful discounted pages are not otherwise persisted.
+- Captured `data/sample/raw_html/selected_suites_discounted_page.html`: a real Selected Suites dated page (checkin 2026-06-28, checkout 2026-07-02) whose rows carry strikethrough `.bui-price-display__original` prices alongside reduced `.bui-price-display__value` prices.
+- Added `DiscountedRateFixtureTests` to `tests/test_booking_parser_fixtures.py`: asserts both discounted rows parse the reduced current price and higher original price (€698/€1,070 and €802/€1,230), correct per-night math, and `original_price_value > current_price_value`. This exercises the parser's original-price handling that the normal-rate fixture does not.
 
 ## Current Package Structure
 
@@ -36,51 +50,45 @@ This session added structured run-output validation (and wired it into the runne
 
 Latest local verification:
 
-- `python -m unittest discover -s tests` ran 66 tests OK.
-- Full `python -m py_compile` sweep passed for the scraper entrypoint, config, and new/changed package modules and tests.
-- `config.load_scraper_config()` loads the curated seven-property target set.
-- Validation helpers verified against real persisted output; `listings.parse_listings` verified against the real 7.6 MB `listings_chania.html` (438 candidates, all named, canonical URLs, priced).
+- `python -m unittest discover -s tests` ran 67 tests OK.
+- Full `python -m py_compile` sweep passed for the scraper entrypoint, config, the discounted-fixture capture script, `parsing.py`, and the updated fixture tests.
+- The new discounted-rate fixture parses to exactly two discounted rows with correct current/original prices and per-night values.
 
 Latest rigorous live validation output:
 
-- Run directory: `saved_dom/runs/20260621_113326_377514` (run before the target-set curation, against Solimar Aquamarine and Elia Daliani).
-- Room inventory records: 7
-- Price row records: 94
-- Failure records: 16 (all `empty_availability`, expected for sold-out near dates)
-- Duplicate inventory records: 0
-- Missing inventory fields: 0
-- Nonpositive prices: 0
-- Bad per-night calculations: 0
-- Missing failure snapshots: 0
-- Price rows with null `room_id`: 1 (known carry-forward edge case)
-- `validation_report.json` written with `is_valid: true`, `issue_count: 0`; log showed the new "validation passed" line and no `ERROR`/`Traceback`/`exception`/`failed` matches.
+- Run directory: `saved_dom/runs/20260621_115932_254135` (curated seven-property set).
+- Room inventory records: 30
+- Price row records: 316
+- Failure records: 39 (all `empty_availability`)
+- Discounted rows captured (non-null `original_price_text`): 72 (Selected Suites 54, Angellinas Apartments 13, Samonas 5)
+- Per-property coverage (inventory / price / failures): JW Marriott 9/123/3, Elysia Boutique 6/53/5, Selected Suites 4/54/3, Samonas Orange Villa 1/5/10, Angellinas Apartments 3/13/5, Sofia's Lovely Rooms 5/23/4, Elia Daliani 2/45/9.
+- Price rows with null `room_id`: 3 (known carry-forward edge case; not flagged by the validator)
+- `validation_report.json` written with `is_valid: true`, `issue_count: 0`; log showed the "validation passed" line and no errors/tracebacks.
 
 ## Recent Commits
 
+- `3d18ae2 Add discounted-rate fixture and parser regression tests`
 - `5ba68c4 Curate diverse scrape target set`
 - `4141fc6 Add listings page parser for property selection`
 - `b457723 Validate run output at end of each scrape`
 - `896665d Add structured run-output validation helpers`
-- `cfd12d2 Expand project README`
-- `82d1cc0 Update session handoff notes`
 
 ## What Remains
 
-- Run rigorous live validation against the new seven-property target set to confirm the curated URLs are reachable end to end and that `validation_report.json` lands clean for a larger, more varied scrape.
-- Capture a real discounted-rate row from the larger hotels/resorts and add a discounted-rate fixture plus parser coverage (still the main open fixture gap).
-- Add a selector-drift fixture and regression coverage.
-- Review room matching, price normalization, and availability edge cases before scaling beyond the curated property list, including whether the null `room_id` carry-forward case warrants a parser fix or a dedicated validator check.
-- Consider trimming the large `listings_chania.html` retention policy, or document why the full page is kept, since it is large generated HTML rather than a small fixture.
+- Add a selector-drift fixture and regression coverage (now the main open fixture gap).
+- Decide how to handle the null `room_id` carry-forward case (price row precedes its room-type header): either a parser fix or a dedicated validator check. The live run reproduced 3 such rows and the validator still does not flag them.
+- Review room matching, price normalization, and availability edge cases before scaling beyond the curated property list.
+- Reconsider the large-fixture retention policy. There are now three large real fixtures (`listings_chania.html` 7.6 MB, `elia_palatino_listing_page.html` ~2 MB, `selected_suites_discounted_page.html` ~1.8 MB). Either document why full pages are kept or trim them to focused price-table/listing fragments.
 
 ## Known Issues
 
-- Fixtures cover useful real cases (normal listing, empty availability, trimmed listings page) but still lack selector-drift and discounted-rate examples.
+- Fixtures now cover normal listing, empty availability, trimmed listings page, and discounted rates, but still lack a selector-drift example.
 - Live Booking.com DOM and availability behavior can change; category and parser heuristics should keep getting regression tests as new live cases appear.
-- Generated scrape outputs under `saved_dom/runs/` should stay local; promote only small representative HTML to `data/sample/raw_html/`.
-- One price row in the latest live run had a null `room_id` (carry-forward when a price row precedes its room-type header). The run-output validator does not currently flag this; review before downstream modelling.
-- `listings_chania.html` is a 7.6 MB saved page; the listings parser is unit tested against the small `listings_chania_sample.html` instead.
+- Generated scrape outputs under `saved_dom/runs/` should stay local (git-ignored); promote only representative HTML to `data/sample/raw_html/`.
+- Price rows can still carry a null `room_id` (carry-forward when a price row precedes its room-type header); the latest live run produced 3. The run-output validator does not currently flag this; review before downstream modelling.
+- The new discounted-rate fixture is ~1.8 MB (a full saved page, consistent with `elia_palatino_listing_page.html`), adding to the large-fixture footprint already flagged for `listings_chania.html`.
 - The listing display name can differ from the URL slug (e.g. "Angellinas Apartments" maps to slug `ntountoulaki-maria`); the scraper keys on the URL, which is the stable identifier.
 
 ## Next Recommended Step
 
-Run a rigorous live validation scrape against the curated seven-property set (`python notebooks/property_page_scraper.py`). Confirm `validation_report.json` reports `is_valid: true`, review per-property room and price coverage, and harvest a discounted-rate row from the larger hotels/resorts to promote into a new discounted-rate fixture with parser regression tests.
+Add selector-drift coverage: capture or construct a fixture whose price/inventory selectors have shifted, confirm the failure classifier labels it `selector_drift`, and add regression tests. In parallel, decide and implement the null `room_id` handling (parser fix vs. dedicated validator check) before scaling the property set further.
