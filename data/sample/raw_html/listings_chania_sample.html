@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<!--
+  Trimmed, faithful sample of a Booking.com Chania search-results page.
+  Mirrors the real listings DOM (data-testid attributes, bd77474a8e property
+  link class) at a fraction of the size so the listings parser can be unit
+  tested. Cards intentionally cover: a tracking-query URL, a discounted price,
+  missing optional fields, a title-link fallback, and a duplicate URL.
+-->
+<html lang="en-gb">
+  <head><meta charset="utf-8" /><title>Search results: Chania</title></head>
+  <body>
+    <div data-testid="property-list">
+      <!-- 1. Hotel with all fields and a tracking-query URL to normalize. -->
+      <div data-testid="property-card" role="listitem">
+        <a data-testid="property-card-desktop-single-image"
+           href="https://www.booking.com/hotel/gr/nearchou-boutique.en-gb.html?label=gen173bo-abc&aid=304142&checkin=2026-04-03&checkout=2026-04-04&group_adults=1#room">
+          <img alt="Nearchou Boutique Hotel" /></a>
+        <div data-testid="title">Nearchou Boutique Hotel</div>
+        <a class="bd77474a8e" data-testid="title-link"
+           href="https://www.booking.com/hotel/gr/nearchou-boutique.en-gb.html?label=gen173bo-abc&checkin=2026-04-03&checkout=2026-04-04#room">
+          <span>Nearchou Boutique Hotel</span></a>
+        <span data-testid="price-and-discounted-price">&euro;&nbsp;116</span>
+        <div data-testid="review-score">Scored 9.8 9.8 Exceptional 191 reviews</div>
+        <div data-testid="recommended-units">Deluxe Double Room 1 large double bed Breakfast included</div>
+      </div>
+
+      <!-- 2. Apartment, plain canonical URL, all fields present. -->
+      <div data-testid="property-card" role="listitem">
+        <div data-testid="title">Adriana Apartment</div>
+        <a class="bd77474a8e" data-testid="title-link"
+           href="https://www.booking.com/hotel/gr/adriana-apartment.en-gb.html">
+          <span>Adriana Apartment</span></a>
+        <span data-testid="price-and-discounted-price">&euro;&nbsp;72</span>
+        <div data-testid="review-score">Scored 8.6 8.6 Fabulous 410 reviews</div>
+        <div data-testid="recommended-units">One-Bedroom Apartment Entire apartment Free cancellation</div>
+      </div>
+
+      <!-- 3. Discounted price (original struck through + current). -->
+      <div data-testid="property-card" role="listitem">
+        <div data-testid="title">Domes Zeen Chania</div>
+        <a class="bd77474a8e" data-testid="title-link"
+           href="https://www.booking.com/hotel/gr/domes-zeen-chania.en-gb.html?checkin=2026-08-20">
+          <span>Domes Zeen Chania</span></a>
+        <span data-testid="price-and-discounted-price">
+          <span aria-hidden="true"><s>&euro;&nbsp;380</s></span>
+          <span>&euro;&nbsp;304</span>
+        </span>
+        <div data-testid="review-score">Scored 9.2 9.2 Superb 252 reviews</div>
+        <div data-testid="recommended-units">Tropical Family Bungalow 2 beds Garden view</div>
+      </div>
+
+      <!-- 4. Missing review-score and recommended-units (optional fields). -->
+      <div data-testid="property-card" role="listitem">
+        <div data-testid="title">Rooms 47</div>
+        <a class="bd77474a8e" data-testid="title-link"
+           href="https://www.booking.com/hotel/gr/rooms-47.en-gb.html?aid=304142">
+          <span>Rooms 47</span></a>
+        <span data-testid="price-and-discounted-price">&euro;&nbsp;39</span>
+      </div>
+
+      <!-- 5. No title-link: parser must fall back to the image link href. -->
+      <div data-testid="property-card" role="listitem">
+        <div data-testid="title">Villa Avra Crete</div>
+        <a data-testid="property-card-desktop-single-image"
+           href="https://www.booking.com/hotel/gr/villa-avra-crete.en-gb.html?label=gen173bo-xyz&hpos=7">
+          <img alt="Villa Avra Crete" /></a>
+        <span data-testid="price-and-discounted-price">&euro;&nbsp;210</span>
+        <div data-testid="review-score">Scored 9.0 9.0 Superb 88 reviews</div>
+        <div data-testid="recommended-units">Two-Bedroom Villa with Private Pool</div>
+      </div>
+
+      <!-- 6. Duplicate of card 2's property: must be collapsed. -->
+      <div data-testid="property-card" role="listitem">
+        <div data-testid="title">Adriana Apartment</div>
+        <a class="bd77474a8e" data-testid="title-link"
+           href="https://www.booking.com/hotel/gr/adriana-apartment.en-gb.html?hpos=99&checkin=2026-09-01">
+          <span>Adriana Apartment</span></a>
+        <span data-testid="price-and-discounted-price">&euro;&nbsp;75</span>
+        <div data-testid="review-score">Scored 8.6 8.6 Fabulous 410 reviews</div>
+        <div data-testid="recommended-units">One-Bedroom Apartment Entire apartment</div>
+      </div>
+    </div>
+  </body>
+</html>
