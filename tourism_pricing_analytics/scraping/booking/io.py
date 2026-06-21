@@ -8,7 +8,9 @@ from playwright.sync_api import Page
 
 from tourism_pricing_analytics.scraping.booking.models import (
     PriceRowRecord,
+    PropertyFeatureRecord,
     PropertyTarget,
+    RoomFeatureRecord,
     RoomInventoryRecord,
     ScrapeFailureRecord,
 )
@@ -70,6 +72,14 @@ def failure_records_to_dicts(records: list[ScrapeFailureRecord]) -> list[dict]:
     return [asdict(record) for record in records]
 
 
+def room_feature_records_to_dicts(records: list[RoomFeatureRecord]) -> list[dict]:
+    return [asdict(record) for record in records]
+
+
+def property_feature_records_to_dicts(records: list[PropertyFeatureRecord]) -> list[dict]:
+    return [asdict(record) for record in records]
+
+
 def save_property_room_inventory(
     records: list[RoomInventoryRecord],
     output_dir: Path,
@@ -97,6 +107,26 @@ def save_property_failures(
     return save_jsonl_file(
         failure_records_to_dicts(records),
         output_dir / "failures.jsonl",
+    )
+
+
+def save_property_room_features(
+    records: list[RoomFeatureRecord],
+    output_dir: Path,
+) -> Path:
+    return save_jsonl_file(
+        room_feature_records_to_dicts(records),
+        output_dir / "room_features.jsonl",
+    )
+
+
+def save_property_features(
+    records: list[PropertyFeatureRecord],
+    output_dir: Path,
+) -> Path:
+    return save_jsonl_file(
+        property_feature_records_to_dicts(records),
+        output_dir / "property_features.jsonl",
     )
 
 
