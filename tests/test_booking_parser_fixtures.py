@@ -14,10 +14,15 @@ from tourism_pricing_analytics.scraping.booking.parsing import (
 
 FIXTURE_DIR = Path(__file__).resolve().parent.parent / "data" / "sample" / "raw_html"
 ELIA_PALATINO_FIXTURE = FIXTURE_DIR / "elia_palatino_listing_page.html"
+DISCOUNTED_FIXTURE = FIXTURE_DIR / "selected_suites_discounted_page.html"
 CAPTURED_AT = "2026-06-20T00:00:00"
 TARGET = PropertyTarget(
     name="Elia Palatino Hotel",
     url="https://www.booking.com/hotel/gr/elia-palatino.en-gb.html",
+)
+DISCOUNTED_TARGET = PropertyTarget(
+    name="Selected Suites",
+    url="https://www.booking.com/hotel/gr/selected-suites.en-gb.html",
 )
 
 
@@ -113,6 +118,80 @@ class BookingParserFixtureTests(unittest.TestCase):
         self.assertEqual(deluxe_row.scarcity_text, "We have 1 left")
         self.assertEqual(deluxe_row.current_price_value, 213.0)
         self.assertEqual(deluxe_row.price_per_night, 30.43)
+
+
+class DiscountedRateFixtureTests(unittest.TestCase):
+    """Regression coverage for a real Booking.com page that shows discounted rates.
+
+    The fixture is a saved Selected Suites dated page whose rows carry a
+    strikethrough ``.bui-price-display__original`` price alongside the reduced
+    ``.bui-price-display__value`` price, exercising the parser's original-price
+    handling that the normal-rate fixture does not.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.fixture_html = DISCOUNTED_FIXTURE.read_text(encoding="utf-8")
+        cls.playwright = sync_playwright().start()
+        try:
+            cls.browser = cls.playwright.chromium.launch(headless=True)
+        except PlaywrightError as exc:
+            cls.playwright.stop()
+            raise unittest.SkipTest(f"Playwright browser is unavailable: {exc}") from exc
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        browser = getattr(cls, "browser", None)
+        if browser is not None:
+            browser.close()
+        playwright = getattr(cls, "playwright", None)
+        if playwright is not None:
+            playwright.stop()
+
+    def setUp(self) -> None:
+        self.page = self.browser.new_page()
+        self.page.set_content(self.fixture_html, wait_until="domcontentloaded")
+
+    def tearDown(self) -> None:
+        self.page.close()
+
+    def test_extract_discounted_price_rows(self) -> None:
+        records = extract_price_rows(
+            self.page,
+            target=DISCOUNTED_TARGET,
+            checkin=date(2026, 6, 28),
+            checkout=date(2026, 7, 2),
+            lead_time_days=7,
+            stay_length_days=4,
+            captured_at=CAPTURED_AT,
+        )
+
+        self.assertEqual(len(records), 2)
+        # Every row on this page is discounted: a reduced current price and a
+        # higher strikethrough original price that must parse to a larger value.
+        for record in records:
+            self.assertEqual(record.room_id, "1377003802")
+            self.assertEqual(record.room_name, "Suite with Private Steam Room & Pool View")
+            self.assertIsNotNone(record.original_price_text)
+            self.assertIsNotNone(record.original_price_value)
+            self.assertIsNotNone(record.current_price_value)
+            self.assertGreater(record.original_price_value, record.current_price_value)
+
+        by_block_id = {record.block_id: record for record in records}
+
+        breakfast_extra = by_block_id["1377003802_409828619_0_2_0"]
+        self.assertEqual(breakfast_extra.current_price_text, "€ 698")
+        self.assertEqual(breakfast_extra.current_price_value, 698.0)
+        self.assertEqual(breakfast_extra.original_price_text, "€ 1,070")
+        self.assertEqual(breakfast_extra.original_price_value, 1070.0)
+        self.assertEqual(breakfast_extra.price_per_night, 174.5)
+
+        breakfast_included = by_block_id["1377003802_409828619_0_1_0"]
+        self.assertEqual(breakfast_included.current_price_text, "€ 802")
+        self.assertEqual(breakfast_included.current_price_value, 802.0)
+        self.assertEqual(breakfast_included.original_price_text, "€ 1,230")
+        self.assertEqual(breakfast_included.original_price_value, 1230.0)
+        self.assertEqual(breakfast_included.price_per_night, 200.5)
 
 
 if __name__ == "__main__":
