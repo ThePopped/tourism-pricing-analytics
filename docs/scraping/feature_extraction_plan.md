@@ -167,8 +167,13 @@ Each phase ends with a full rigorous sweep (unit + `py_compile` + fixture/parser
 ### Phase 2 — Layer 2 derivation & encoding
 - Implement `seasonality`, `meal_plan`, `cancellation`, `encoders` (full
   amenity multi-hot, ordinals), and `build_features` join.
+- Reconcile price rows whose `room_id` is null but whose `room_name` is set
+  (Booking "bbasic" generic blocks) to a numeric id by `(property_url,
+  room_name)` against inventory/room features, so they join cleanly. This name
+  → id reconciliation is deliberately a Layer 2 join, not a scrape-time step.
 - Pure unit tests on small synthetic record sets; assert join cardinality,
-  multi-hot vocabulary handling (incl. unseen values), and ordinal mappings.
+  multi-hot vocabulary handling (incl. unseen values), and ordinal mappings,
+  and the name-based room_id reconciliation (incl. an unmatched name).
 
 ### Phase 3 — Tier C property extractors
 - Core: implement `rating`, `reviews` (overall score + count), `geo`,

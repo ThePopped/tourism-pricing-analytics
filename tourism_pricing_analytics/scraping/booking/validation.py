@@ -197,15 +197,16 @@ def validate_price_rows(records: list[dict], *, source: str) -> list[ValidationI
                     )
                 )
 
-        # room_id is the join key to room inventory and (downstream) room
-        # features. The parser recovers it from the block id prefix when the
-        # room-type header is absent, so a null here means neither source was
-        # usable and the row cannot be attributed to a room.
-        if _is_missing(record.get("room_id")):
+        # A price row must be attributable to a room. The preferred key is the
+        # numeric room_id (recovered from the block-id prefix when no header is
+        # present), but Booking's generic "bbasic" blocks expose a room_name with
+        # no numeric id; those rows are still attributable by name and reconciled
+        # to an id downstream. Only a row with neither is truly orphaned.
+        if _is_missing(record.get("room_id")) and _is_missing(record.get("room_name")):
             issues.append(
                 ValidationIssue(
-                    check="price_row_room_id",
-                    message="Price row is missing room_id (no header and no usable block_id)",
+                    check="price_row_room_identity",
+                    message="Price row has neither room_id nor room_name; cannot attribute to a room",
                     location=location,
                 )
             )

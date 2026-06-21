@@ -204,13 +204,23 @@ class PriceRowValidationTests(unittest.TestCase):
         )
         self.assertEqual(issues, [])
 
-    def test_detects_missing_room_id(self) -> None:
+    def test_flags_row_with_neither_room_id_nor_room_name(self) -> None:
         issues = validate_price_rows(
-            [_price_record(room_id=None)],
+            [_price_record(room_id=None, room_name=None)],
             source="price_rows.jsonl",
         )
         checks = [issue.check for issue in issues]
-        self.assertIn("price_row_room_id", checks)
+        self.assertIn("price_row_room_identity", checks)
+
+    def test_accepts_row_with_name_but_no_room_id(self) -> None:
+        # Booking "bbasic" generic blocks expose a room_name but no numeric id;
+        # such rows are attributable by name and must not be flagged.
+        issues = validate_price_rows(
+            [_price_record(room_id=None, room_name="Deluxe Double Room", block_id="bbasic_0")],
+            source="price_rows.jsonl",
+        )
+        checks = [issue.check for issue in issues]
+        self.assertNotIn("price_row_room_identity", checks)
 
     def test_detects_inconsistent_price_per_night(self) -> None:
         issues = validate_price_rows(

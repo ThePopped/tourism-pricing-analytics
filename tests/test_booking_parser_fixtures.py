@@ -267,5 +267,72 @@ class RoomIdRecoveryFixtureTests(unittest.TestCase):
         self.assertTrue(all(record.room_id is not None for record in records))
 
 
+class GenericBlockRoomNameFixtureTests(unittest.TestCase):
+    """Booking's generic "bbasic" block exposes a room name but no numeric room
+    id, and its block id ("bbasic_0") has no numeric prefix to recover. Such a
+    row must keep its room_name (null room_id), so it stays attributable by name
+    and is reconciled to an id downstream rather than dropped.
+    """
+
+    SYNTHETIC_HTML = """
+    <html><body><table><tbody>
+      <tr class="js-rt-block-row" data-block-id="bbasic_0">
+        <th class="hprt-table-cell-roomtype">
+          <a class="hprt-roomtype-link">Deluxe Double Room</a>
+        </th>
+        <td class="hprt-table-cell-occupancy">2 adults</td>
+        <td class="hprt-table-cell-conditions">Non-refundable</td>
+        <td><div class="bui-price-display__value">&euro; 895</div></td>
+      </tr>
+    </tbody></table></body></html>
+    """
+
+    TARGET = PropertyTarget(
+        name="Generic Block Property",
+        url="https://www.booking.com/hotel/gr/generic-block.en-gb.html",
+    )
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.playwright = sync_playwright().start()
+        try:
+            cls.browser = cls.playwright.chromium.launch(headless=True)
+        except PlaywrightError as exc:
+            cls.playwright.stop()
+            raise unittest.SkipTest(f"Playwright browser is unavailable: {exc}") from exc
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        browser = getattr(cls, "browser", None)
+        if browser is not None:
+            browser.close()
+        playwright = getattr(cls, "playwright", None)
+        if playwright is not None:
+            playwright.stop()
+
+    def setUp(self) -> None:
+        self.page = self.browser.new_page()
+        self.page.set_content(self.SYNTHETIC_HTML, wait_until="domcontentloaded")
+
+    def tearDown(self) -> None:
+        self.page.close()
+
+    def test_generic_block_keeps_room_name_with_null_room_id(self) -> None:
+        records = extract_price_rows(
+            self.page,
+            target=self.TARGET,
+            checkin=date(2026, 7, 4),
+            checkout=date(2026, 7, 11),
+            lead_time_days=14,
+            stay_length_days=7,
+            captured_at=CAPTURED_AT,
+        )
+
+        self.assertEqual(len(records), 1)
+        record = records[0]
+        self.assertIsNone(record.room_id)
+        self.assertEqual(record.room_name, "Deluxe Double Room")
+
+
 if __name__ == "__main__":
     unittest.main()
