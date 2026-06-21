@@ -189,6 +189,19 @@ Each phase ends with a full rigorous sweep (unit + `py_compile` + fixture/parser
   extractor, including a case that asserts a fully-scrolled DOM parses the
   facilities / subscores / surroundings sections.
 
+**Phase 3 live finding (deferred fix):** a curated 7-property live run
+(`saved_dom/runs/20260621_213828_860429`, `is_valid: true`) confirmed the
+end-to-end wiring and strong coverage for review score/count, property type, geo,
+subscores, nearby POIs, star rating (where shown), and check-in times. However,
+`property_facilities` and `languages_spoken` came back empty (0/7) live even
+though the extractors parse them correctly on the saved fixture (75 facilities, 2
+languages). The whole-property facilities section is lazy-loaded further down the
+page and the current 2-round `noisy_scroll` does not trigger it. The extractors
+are correct and stay best-effort/nullable (validation passes); the fix is a
+browser-orchestration change — deeper scroll to the facilities section and/or a
+"See all facilities" expander click — to be made and re-verified during Phase 4's
+final live validation.
+
 ### Phase 4 — live validation & handoff
 - Run `python notebooks/property_page_scraper.py` against the curated set;
   confirm `validation_report.json` `is_valid: true`; review per-property

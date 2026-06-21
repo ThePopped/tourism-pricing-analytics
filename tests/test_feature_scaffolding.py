@@ -186,18 +186,31 @@ class RunExtractorsTests(unittest.TestCase):
 
 
 class RegistryTests(unittest.TestCase):
-    def test_room_extractors_registered_and_property_extractors_pending(self) -> None:
+    def test_room_and_property_extractors_registered(self) -> None:
         # Tier B room extractors are wired in Phase 1; Tier C property extractors
         # arrive in Phase 3.
-        names = {extractor.name for extractor in ROOM_EXTRACTORS}
+        room_names = {extractor.name for extractor in ROOM_EXTRACTORS}
         self.assertEqual(
-            names,
+            room_names,
             {"room_size", "beds", "occupancy", "amenities", "room_class"},
         )
-        self.assertEqual(PROPERTY_EXTRACTORS, [])
+        property_names = {extractor.name for extractor in PROPERTY_EXTRACTORS}
+        self.assertEqual(
+            property_names,
+            {
+                "rating",
+                "reviews",
+                "geo",
+                "prop_type",
+                "facilities",
+                "surroundings",
+                "policies",
+                "misc",
+            },
+        )
 
     def test_all_extractors_have_name_and_extract(self) -> None:
-        for extractor in ROOM_EXTRACTORS:
+        for extractor in [*ROOM_EXTRACTORS, *PROPERTY_EXTRACTORS]:
             self.assertIsInstance(extractor.name, str)
             self.assertTrue(callable(extractor.extract))
 

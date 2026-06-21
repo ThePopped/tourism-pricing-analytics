@@ -326,6 +326,101 @@ def validate_room_features(records: list[dict], *, source: str) -> list[Validati
     return issues
 
 
+def validate_property_features(records: list[dict], *, source: str) -> list[ValidationIssue]:
+    """Validate the property-features stream: a clean join key and sane magnitudes.
+
+    property_url is the join key to price rows, so it must be present and unique.
+    Scores/subscores, when present, must fall within Booking's 0-10 scale; the
+    star rating within 0-5; and counts/distances must be non-negative. A value
+    outside these bounds signals a parsing error rather than a real listing.
+    """
+
+    issues: list[ValidationIssue] = []
+    seen_urls: set[str] = set()
+
+    for index, record in enumerate(records, start=1):
+        location = f"{source}:{index}"
+
+        property_url = record.get("property_url")
+        if _is_missing(property_url):
+            issues.append(
+                ValidationIssue(
+                    check="property_feature_property_url",
+                    message="Property feature record is missing property_url",
+                    location=location,
+                )
+            )
+        else:
+            url = str(property_url)
+            if url in seen_urls:
+                issues.append(
+                    ValidationIssue(
+                        check="property_feature_duplicates",
+                        message=f"Duplicate property feature record for property_url={property_url!r}",
+                        location=location,
+                    )
+                )
+            seen_urls.add(url)
+
+        star_rating = record.get("star_rating")
+        if isinstance(star_rating, (int, float)) and not (0 < star_rating <= 5):
+            issues.append(
+                ValidationIssue(
+                    check="property_feature_bounds",
+                    message=f"star_rating {star_rating} is outside (0, 5]",
+                    location=location,
+                )
+            )
+
+        review_score = record.get("review_score")
+        if isinstance(review_score, (int, float)) and not (0 <= review_score <= 10):
+            issues.append(
+                ValidationIssue(
+                    check="property_feature_bounds",
+                    message=f"review_score {review_score} is outside [0, 10]",
+                    location=location,
+                )
+            )
+
+        subscores = record.get("review_subscores")
+        if isinstance(subscores, dict):
+            for category, value in subscores.items():
+                if isinstance(value, (int, float)) and not (0 <= value <= 10):
+                    issues.append(
+                        ValidationIssue(
+                            check="property_feature_bounds",
+                            message=f"review subscore {category!r}={value} is outside [0, 10]",
+                            location=location,
+                        )
+                    )
+
+        for count_field in ("review_count", "photo_count"):
+            value = record.get(count_field)
+            if isinstance(value, int) and value < 0:
+                issues.append(
+                    ValidationIssue(
+                        check="property_feature_bounds",
+                        message=f"{count_field} {value} is negative",
+                        location=location,
+                    )
+                )
+
+        nearby_poi = record.get("nearby_poi")
+        if isinstance(nearby_poi, list):
+            for poi in nearby_poi:
+                distance = poi.get("distance") if isinstance(poi, dict) else None
+                if isinstance(distance, (int, float)) and distance < 0:
+                    issues.append(
+                        ValidationIssue(
+                            check="property_feature_bounds",
+                            message=f"nearby_poi distance {distance} is negative",
+                            location=location,
+                        )
+                    )
+
+    return issues
+
+
 def validate_failures(
     records: list[dict],
     run_dir: Path,
@@ -390,5 +485,14 @@ def validate_run_directory(run_dir: Path) -> RunValidationReport:
         feature_records, feature_parse_issues = load_jsonl_records(room_features_path)
         issues.extend(feature_parse_issues)
         issues.extend(validate_room_features(feature_records, source="room_features.jsonl"))
+
+    # property_features.jsonl is likewise optional (absent in pre-Tier-C runs).
+    property_features_path = run_dir / "property_features.jsonl"
+    if property_features_path.exists():
+        property_records, property_parse_issues = load_jsonl_records(property_features_path)
+        issues.extend(property_parse_issues)
+        issues.extend(
+            validate_property_features(property_records, source="property_features.jsonl")
+        )
 
     return RunValidationReport(run_dir=run_dir, issues=issues)

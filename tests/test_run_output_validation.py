@@ -11,10 +11,32 @@ from tourism_pricing_analytics.scraping.booking.validation import (
     report_to_dict,
     validate_failures,
     validate_price_rows,
+    validate_property_features,
     validate_room_features,
     validate_room_inventory,
     validate_run_directory,
 )
+
+
+def _property_feature_record(**overrides) -> dict:
+    record = {
+        "property_name": "Example Hotel",
+        "property_url": "https://www.booking.com/hotel/gr/example.en-gb.html",
+        "captured_at": "2026-06-20T18:00:00",
+        "star_rating": 4.0,
+        "review_score": 8.7,
+        "review_count": 120,
+        "property_type": "Hotel",
+        "latitude": 35.3,
+        "longitude": 25.1,
+        "review_subscores": {"Cleanliness": 9.1, "Location": 9.4},
+        "property_facilities": ["Pool"],
+        "nearby_poi": [{"poi_name": "Beach", "distance": 300.0, "unit": "m"}],
+        "photo_count": 42,
+        "languages_spoken": ["English", "Greek"],
+    }
+    record.update(overrides)
+    return record
 
 
 def _room_feature_record(**overrides) -> dict:
@@ -293,6 +315,69 @@ class RoomFeatureValidationTests(unittest.TestCase):
         self.assertEqual(issues, [])
 
 
+class PropertyFeatureValidationTests(unittest.TestCase):
+    def test_clean_records_have_no_issues(self) -> None:
+        issues = validate_property_features(
+            [_property_feature_record()],
+            source="property_features.jsonl",
+        )
+        self.assertEqual(issues, [])
+
+    def test_detects_missing_property_url(self) -> None:
+        issues = validate_property_features(
+            [_property_feature_record(property_url=None)],
+            source="property_features.jsonl",
+        )
+        checks = [issue.check for issue in issues]
+        self.assertIn("property_feature_property_url", checks)
+
+    def test_detects_duplicate_property_url(self) -> None:
+        issues = validate_property_features(
+            [_property_feature_record(), _property_feature_record()],
+            source="property_features.jsonl",
+        )
+        checks = [issue.check for issue in issues]
+        self.assertIn("property_feature_duplicates", checks)
+
+    def test_detects_out_of_range_scores_and_negative_counts(self) -> None:
+        issues = validate_property_features(
+            [
+                _property_feature_record(
+                    star_rating=7.0,
+                    review_score=99.0,
+                    review_subscores={"Location": 50.0},
+                    review_count=-1,
+                    nearby_poi=[{"poi_name": "Beach", "distance": -5.0, "unit": "m"}],
+                )
+            ],
+            source="property_features.jsonl",
+        )
+        bounds = [issue for issue in issues if issue.check == "property_feature_bounds"]
+        # star_rating, review_score, one subscore, review_count, one poi distance.
+        self.assertEqual(len(bounds), 5)
+
+    def test_allows_null_best_effort_fields(self) -> None:
+        issues = validate_property_features(
+            [
+                _property_feature_record(
+                    star_rating=None,
+                    review_score=None,
+                    review_count=None,
+                    property_type=None,
+                    latitude=None,
+                    longitude=None,
+                    review_subscores={},
+                    property_facilities=[],
+                    nearby_poi=[],
+                    photo_count=None,
+                    languages_spoken=[],
+                )
+            ],
+            source="property_features.jsonl",
+        )
+        self.assertEqual(issues, [])
+
+
 class FailureValidationTests(unittest.TestCase):
     def test_clean_records_have_no_issues(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -386,6 +471,18 @@ class ValidateRunDirectoryTests(unittest.TestCase):
             report = validate_run_directory(run_dir)
         self.assertFalse(report.is_valid)
         self.assertIn("room_feature_room_id", report.issue_counts_by_check())
+
+    def test_optional_property_features_stream_is_validated_when_present(self) -> None:
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            _write_valid_run(run_dir)
+            _write_jsonl(
+                run_dir / "property_features.jsonl",
+                [_property_feature_record(review_score=99.0)],
+            )
+            report = validate_run_directory(run_dir)
+        self.assertFalse(report.is_valid)
+        self.assertIn("property_feature_bounds", report.issue_counts_by_check())
 
     def test_valid_run_without_room_features_stays_valid(self) -> None:
         with TemporaryDirectory() as tmp:
