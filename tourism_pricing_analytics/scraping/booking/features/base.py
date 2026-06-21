@@ -19,8 +19,14 @@ from playwright.sync_api import Locator, Page
 
 @dataclass(frozen=True)
 class RoomFeatureContext:
-    """Inputs for a room-scope extractor: the room-type table cell plus identity."""
+    """Inputs for a room-scope extractor.
 
+    ``row`` is the room's header ``<tr>`` (so extractors can reach sibling cells
+    such as the occupancy cell), and ``room_cell`` is the
+    ``th.hprt-table-cell-roomtype`` within it (room name, beds, size, amenities).
+    """
+
+    row: Locator
     room_cell: Locator
     property_url: str
     room_id: str | None

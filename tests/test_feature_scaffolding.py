@@ -186,9 +186,20 @@ class RunExtractorsTests(unittest.TestCase):
 
 
 class RegistryTests(unittest.TestCase):
-    def test_registries_are_empty_at_phase_zero(self) -> None:
-        self.assertEqual(ROOM_EXTRACTORS, [])
+    def test_room_extractors_registered_and_property_extractors_pending(self) -> None:
+        # Tier B room extractors are wired in Phase 1; Tier C property extractors
+        # arrive in Phase 3.
+        names = {extractor.name for extractor in ROOM_EXTRACTORS}
+        self.assertEqual(
+            names,
+            {"room_size", "beds", "occupancy", "amenities", "room_class"},
+        )
         self.assertEqual(PROPERTY_EXTRACTORS, [])
+
+    def test_all_extractors_have_name_and_extract(self) -> None:
+        for extractor in ROOM_EXTRACTORS:
+            self.assertIsInstance(extractor.name, str)
+            self.assertTrue(callable(extractor.extract))
 
 
 if __name__ == "__main__":

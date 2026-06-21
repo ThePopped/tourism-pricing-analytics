@@ -11,16 +11,19 @@ from tourism_pricing_analytics.scraping.booking.failures import (
     PageFailureClassification,
     classify_playwright_page_failure,
 )
+from tourism_pricing_analytics.scraping.booking.features.extract import extract_room_features
 from tourism_pricing_analytics.scraping.booking.io import (
     create_property_output_dir,
     create_run_dir,
     failure_records_to_dicts,
     price_row_records_to_dicts,
+    room_feature_records_to_dicts,
     room_inventory_records_to_dicts,
     save_full_page_dom,
     save_jsonl_file,
     save_property_failures,
     save_property_price_rows,
+    save_property_room_features,
     save_property_room_inventory,
     save_validation_report,
     setup_logging,
@@ -28,6 +31,7 @@ from tourism_pricing_analytics.scraping.booking.io import (
 from tourism_pricing_analytics.scraping.booking.models import (
     FailureCategory,
     PriceRowRecord,
+    RoomFeatureRecord,
     RoomInventoryRecord,
     ScrapeFailureRecord,
     ScrapeStage,
@@ -258,13 +262,18 @@ def run_price_loop(
     page: Page | None,
     scraper_config: ScraperConfig,
     property_output_dirs: dict[str, Path],
-) -> tuple[Page | None, list[PriceRowRecord], list[ScrapeFailureRecord]]:
+) -> tuple[Page | None, list[PriceRowRecord], list[RoomFeatureRecord], list[ScrapeFailureRecord]]:
     records: list[PriceRowRecord] = []
+    room_feature_records: list[RoomFeatureRecord] = []
     failure_records: list[ScrapeFailureRecord] = []
 
     for target in scraper_config.properties:
         output_dir = property_output_dirs[target.url]
         property_records: list[PriceRowRecord] = []
+        # Room features are date-stable, so collect each room once across all
+        # date windows, keyed by room_id, to maximise coverage if availability
+        # differs between windows.
+        room_features_by_id: dict[str, RoomFeatureRecord] = {}
 
         for lead_time_days in scraper_config.lead_times:
             for stay_length_days in scraper_config.stay_lengths:
@@ -343,6 +352,19 @@ def run_price_loop(
                 records.extend(price_rows)
                 property_records.extend(price_rows)
 
+                # Collect date-stable room features from the loaded page. Isolated
+                # so a feature-extraction error never disrupts the price scrape.
+                try:
+                    for feature in extract_room_features(
+                        page,
+                        property_name=target.name,
+                        property_url=target.url,
+                        captured_at=captured_at,
+                    ):
+                        room_features_by_id.setdefault(feature.room_id, feature)
+                except Exception:
+                    logging.exception("Room feature extraction failed for %s", target.name)
+
                 if not price_rows:
                     classification = classify_current_page_failure(
                         page,
@@ -391,7 +413,17 @@ def run_price_loop(
                 target.name,
             )
 
-    return page, records, failure_records
+        if room_features_by_id:
+            property_features = list(room_features_by_id.values())
+            save_property_room_features(property_features, output_dir)
+            room_feature_records.extend(property_features)
+            logging.info(
+                "Saved %d room feature records for %s",
+                len(property_features),
+                target.name,
+            )
+
+    return page, records, room_feature_records, failure_records
 
 
 def validate_and_report_run(run_dir: Path) -> None:
@@ -452,7 +484,7 @@ def run(playwright: Playwright, scraper_config: ScraperConfig, run_dir: Path) ->
             scraper_config=scraper_config,
             property_output_dirs=property_output_dirs,
         )
-        page, price_row_records, price_row_failures = run_price_loop(
+        page, price_row_records, room_feature_records, price_row_failures = run_price_loop(
             context=context,
             page=page,
             scraper_config=scraper_config,
@@ -469,6 +501,10 @@ def run(playwright: Playwright, scraper_config: ScraperConfig, run_dir: Path) ->
             run_dir / "price_rows.jsonl",
         )
         save_jsonl_file(
+            room_feature_records_to_dicts(room_feature_records),
+            run_dir / "room_features.jsonl",
+        )
+        save_jsonl_file(
             failure_records_to_dicts(failure_records),
             run_dir / "failures.jsonl",
         )
@@ -481,6 +517,7 @@ def run(playwright: Playwright, scraper_config: ScraperConfig, run_dir: Path) ->
 
         logging.info("Room inventory records saved: %d", len(room_inventory_records))
         logging.info("Price row records saved: %d", len(price_row_records))
+        logging.info("Room feature records saved: %d", len(room_feature_records))
         logging.info("Failure records saved: %d", len(failure_records))
 
         validate_and_report_run(run_dir)

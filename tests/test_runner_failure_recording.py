@@ -85,7 +85,7 @@ class RunnerFailureRecordingTests(unittest.TestCase):
             ),
         ):
             with self.assertLogs(level="ERROR"):
-                _, price_rows, failures = run_price_loop(
+                _, price_rows, _room_features, failures = run_price_loop(
                     context=object(),
                     page=page,
                     scraper_config=scraper_config,

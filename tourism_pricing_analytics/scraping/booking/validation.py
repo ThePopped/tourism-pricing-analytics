@@ -252,6 +252,79 @@ def validate_price_rows(records: list[dict], *, source: str) -> list[ValidationI
     return issues
 
 
+def validate_room_features(records: list[dict], *, source: str) -> list[ValidationIssue]:
+    """Validate the room-features stream: a clean join key and sane magnitudes.
+
+    room_id is the join key to price rows, so it must be present and unique per
+    property. Size and occupancy, when present, must fall within sane bounds; a
+    value outside them signals a parsing error rather than a real listing.
+    """
+
+    issues: list[ValidationIssue] = []
+    seen_pairs: set[tuple[str, str]] = set()
+
+    for index, record in enumerate(records, start=1):
+        location = f"{source}:{index}"
+
+        room_id = record.get("room_id")
+        if _is_missing(room_id):
+            issues.append(
+                ValidationIssue(
+                    check="room_feature_room_id",
+                    message="Room feature record is missing room_id",
+                    location=location,
+                )
+            )
+
+        property_url = record.get("property_url")
+        if not _is_missing(room_id) and not _is_missing(property_url):
+            pair = (str(property_url), str(room_id))
+            if pair in seen_pairs:
+                issues.append(
+                    ValidationIssue(
+                        check="room_feature_duplicates",
+                        message=(
+                            "Duplicate room feature record for "
+                            f"(property_url={property_url!r}, room_id={room_id!r})"
+                        ),
+                        location=location,
+                    )
+                )
+            seen_pairs.add(pair)
+
+        room_size_sqm = record.get("room_size_sqm")
+        if isinstance(room_size_sqm, (int, float)) and not (0 < room_size_sqm <= 1000):
+            issues.append(
+                ValidationIssue(
+                    check="room_feature_bounds",
+                    message=f"room_size_sqm {room_size_sqm} is outside (0, 1000]",
+                    location=location,
+                )
+            )
+
+        max_persons = record.get("max_persons")
+        if isinstance(max_persons, int) and not (1 <= max_persons <= 30):
+            issues.append(
+                ValidationIssue(
+                    check="room_feature_bounds",
+                    message=f"max_persons {max_persons} is outside [1, 30]",
+                    location=location,
+                )
+            )
+
+        bed_count = record.get("bed_count")
+        if isinstance(bed_count, int) and bed_count < 0:
+            issues.append(
+                ValidationIssue(
+                    check="room_feature_bounds",
+                    message=f"bed_count {bed_count} is negative",
+                    location=location,
+                )
+            )
+
+    return issues
+
+
 def validate_failures(
     records: list[dict],
     run_dir: Path,
@@ -308,5 +381,13 @@ def validate_run_directory(run_dir: Path) -> RunValidationReport:
     issues.extend(validate_room_inventory(room_records, source="room_inventory.jsonl"))
     issues.extend(validate_price_rows(price_records, source="price_rows.jsonl"))
     issues.extend(validate_failures(failure_records, run_dir, source="failures.jsonl"))
+
+    # room_features.jsonl is an optional stream (absent in pre-feature runs), so
+    # it is only validated when present rather than required.
+    room_features_path = run_dir / "room_features.jsonl"
+    if room_features_path.exists():
+        feature_records, feature_parse_issues = load_jsonl_records(room_features_path)
+        issues.extend(feature_parse_issues)
+        issues.extend(validate_room_features(feature_records, source="room_features.jsonl"))
 
     return RunValidationReport(run_dir=run_dir, issues=issues)

@@ -11,9 +11,27 @@ from tourism_pricing_analytics.scraping.booking.validation import (
     report_to_dict,
     validate_failures,
     validate_price_rows,
+    validate_room_features,
     validate_room_inventory,
     validate_run_directory,
 )
+
+
+def _room_feature_record(**overrides) -> dict:
+    record = {
+        "property_name": "Example Hotel",
+        "property_url": "https://www.booking.com/hotel/gr/example.en-gb.html",
+        "room_id": "12345601",
+        "captured_at": "2026-06-20T18:00:00",
+        "room_size_sqm": 28.0,
+        "bed_types": ["1 large double bed"],
+        "bed_count": 1,
+        "max_persons": 2,
+        "amenities": ["Free WiFi"],
+        "room_class": "Double",
+    }
+    record.update(overrides)
+    return record
 
 
 def _room_record(**overrides) -> dict:
@@ -217,6 +235,54 @@ class PriceRowValidationTests(unittest.TestCase):
         self.assertEqual(issues, [])
 
 
+class RoomFeatureValidationTests(unittest.TestCase):
+    def test_clean_records_have_no_issues(self) -> None:
+        issues = validate_room_features(
+            [_room_feature_record(), _room_feature_record(room_id="12345602")],
+            source="room_features.jsonl",
+        )
+        self.assertEqual(issues, [])
+
+    def test_detects_missing_room_id(self) -> None:
+        issues = validate_room_features(
+            [_room_feature_record(room_id=None)],
+            source="room_features.jsonl",
+        )
+        checks = [issue.check for issue in issues]
+        self.assertIn("room_feature_room_id", checks)
+
+    def test_detects_duplicate_pairs(self) -> None:
+        issues = validate_room_features(
+            [_room_feature_record(), _room_feature_record()],
+            source="room_features.jsonl",
+        )
+        checks = [issue.check for issue in issues]
+        self.assertIn("room_feature_duplicates", checks)
+
+    def test_detects_out_of_range_size_and_occupancy(self) -> None:
+        issues = validate_room_features(
+            [_room_feature_record(room_size_sqm=5000.0, max_persons=99)],
+            source="room_features.jsonl",
+        )
+        checks = [issue.check for issue in issues]
+        self.assertEqual(checks.count("room_feature_bounds"), 2)
+
+    def test_allows_null_best_effort_fields(self) -> None:
+        issues = validate_room_features(
+            [
+                _room_feature_record(
+                    room_size_sqm=None,
+                    max_persons=None,
+                    bed_count=None,
+                    bed_types=[],
+                    room_class=None,
+                )
+            ],
+            source="room_features.jsonl",
+        )
+        self.assertEqual(issues, [])
+
+
 class FailureValidationTests(unittest.TestCase):
     def test_clean_records_have_no_issues(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -298,6 +364,25 @@ class ValidateRunDirectoryTests(unittest.TestCase):
         self.assertIn("room_inventory_duplicates", checks)
         self.assertIn("price_per_night_consistency", checks)
         self.assertIn("failure_snapshot_exists", checks)
+
+    def test_optional_room_features_stream_is_validated_when_present(self) -> None:
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            _write_valid_run(run_dir)
+            _write_jsonl(
+                run_dir / "room_features.jsonl",
+                [_room_feature_record(room_id=None)],
+            )
+            report = validate_run_directory(run_dir)
+        self.assertFalse(report.is_valid)
+        self.assertIn("room_feature_room_id", report.issue_counts_by_check())
+
+    def test_valid_run_without_room_features_stays_valid(self) -> None:
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            _write_valid_run(run_dir)
+            report = validate_run_directory(run_dir)
+        self.assertTrue(report.is_valid, msg=report.issues)
 
     def test_required_files_constant_matches_expected_set(self) -> None:
         self.assertEqual(
