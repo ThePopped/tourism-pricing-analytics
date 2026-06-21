@@ -2,103 +2,85 @@
 
 ## Current Status
 
-The Booking.com scraper has been refactored from the exploratory notebook script into reusable package modules under `tourism_pricing_analytics/scraping/booking/`. `notebooks/property_page_scraper.py` remains as a thin manual compatibility entrypoint.
+The Booking.com scraper runs from reusable package modules under `tourism_pricing_analytics/scraping/booking/`, with `notebooks/property_page_scraper.py` as a thin manual entrypoint.
 
-The active project phase is scraper hardening: broaden fixture coverage, add structured output/data-quality validation, and keep live Booking.com behavior protected by regression tests before expanding the property set.
+The active project phase is scraper hardening: broaden fixture coverage, validate structured run output and data quality, and keep live Booking.com behavior protected by regression tests before scaling the property set.
 
-## Completed
+This session added structured run-output validation (and wired it into the runner), built a listings-page parser to derive scrape targets reproducibly, and curated a type-diverse seven-property target set.
 
-- Added fixture parser tests using `data/sample/raw_html/elia_palatino_listing_page.html`.
-- Covered room inventory extraction against saved HTML, including expected room ids, names, and duplicate protection.
-- Covered dated price-row extraction against saved HTML, including row count, room carry-forward, block ids, quantity options, normalized prices, per-night prices, and scarcity text.
-- Refactored reusable Booking.com scraper logic out of `notebooks/property_page_scraper.py` into package modules.
-- Updated tests to import package modules directly.
-- Updated `pyproject.toml` so setuptools discovers `tourism_pricing_analytics*`.
-- Declared runtime/development metadata in `pyproject.toml`: Python `>=3.10`, Playwright `>=1.58,<2`, `dev` extra, and `setuptools>=61`.
-- Added structured scraper failure classification with machine-readable `ScrapeFailureRecord` output.
-- Added failure categories for empty availability, selector drift, redirects, blocked/challenge pages, partial loads, temporary Booking.com errors, navigation errors, and extraction errors.
-- Updated scraper runner output to write run-level and per-property `failures.jsonl` files and name debug DOM snapshots with the failure category.
-- Fixed a runner failure-recording bug where the price extraction exception branch referenced `exc` without binding it.
-- Added regression coverage for runner failure recording.
-- Fixed a live-discovered classification bug where generic Booking.com error text in page content could override real empty-availability evidence.
-- Updated failure classification to ignore `script`, `style`, and `noscript` text and to classify HTTP 5xx responses as temporary Booking.com errors.
-- Added regression tests so empty availability wins over generic error text and script-only temporary-error strings do not cause false positives.
-- Added a compact empty-availability fixture at `data/sample/raw_html/elia_daliani_empty_availability.html`, promoted from live run `saved_dom/runs/20260620_180133_503012`.
-- Added fixture coverage proving the empty-availability fixture classifies as `empty_availability` even with fallback loaded-page selectors and script-only generic error text present.
-- Updated `docs/scraping/scraper_design.md` with current implementation status and generated-output retention policy.
-- Updated `docs/scraping/next_pass_refactor_plan.md` to replace stale exploratory/smoke-test language with current package structure and rigorous validation expectations.
-- Updated `AGENTS.md` and `CLAUDE.md` with the current package layout, `pip install -e ".[dev]"`, regular commit discipline, and strict phase-completion testing expectations.
-- Removed `changes_applied.md`; commits and PRs are now the change history, with `session_notes.md` reserved for requested handoffs.
+## Completed This Session
+
+- Added `tourism_pricing_analytics/scraping/booking/validation.py`: pure, browser-free helpers that validate a completed run directory under `saved_dom/runs/<timestamp>/`. `validate_run_directory` aggregates all issues into a `RunValidationReport`. Checks cover required run files, JSONL one-object-per-line parsing, duplicate `(property_url, room_id)` inventory pairs, missing `room_id`/`room_name`, missing price `checkin`/`checkout`/`stay_length_days`/`captured_at`, nonpositive prices when raw price text is present, `price_per_night == round(current_price_value / stay_length_days, 2)`, populated failure categories, and existence of referenced snapshot files (searched recursively, since snapshots live in per-property subdirectories).
+- Covered the validation helpers with unit tests over synthetic records and temp run directories.
+- Wired post-run validation into `runner.run`: after artifacts are written it calls `validate_and_report_run`, which validates the run directory, writes `validation_report.json`, and logs a pass/fail summary (per-check counts on failure).
+- Added `validation.report_to_dict` / `RunValidationReport.issue_counts_by_check` and `io.save_validation_report` to persist the report, with tests for serialization and the runner pass/fail logging paths.
+- Added `tourism_pricing_analytics/scraping/booking/listings.py`: a pure BeautifulSoup parser for saved Booking.com search-results pages. `parse_listings` yields `ListingCandidate(name, url, price_text, review_score_text, recommended_unit_text)`, dedupes by canonical URL, and preserves listing order. `normalize_listing_url` strips per-session tracking query/fragment to the stable `/hotel/<cc>/<slug>.html` form used in config.
+- Added a small faithful listings fixture `data/sample/raw_html/listings_chania_sample.html` covering tracking-query URLs, a discounted price, missing optional fields, a title-link fallback, and duplicate collapsing, plus unit tests for the parser and URL normalization.
+- Declared `beautifulsoup4>=4.12,<5` as a runtime and dev dependency in `pyproject.toml`.
+- Curated the scrape target set in `config/booking_scraper_config.json` from two ad hoc properties to seven type-diverse ones (resort, boutique hotel, suite, villa, apartment, rooms-type listing, plus the existing Elia Daliani), derived from the listings parser. Solimar Aquamarine was dropped because it is absent from the Chania listings page.
 
 ## Current Package Structure
 
-- `tourism_pricing_analytics/scraping/booking/models.py`: scraper config, output dataclasses, failure categories, and failure records.
-- `tourism_pricing_analytics/scraping/booking/config.py`: config loading.
-- `tourism_pricing_analytics/scraping/booking/urls.py`: property URL, dated URL, room inventory URL, date window, and slug helpers.
-- `tourism_pricing_analytics/scraping/booking/parsing.py`: price normalization, per-night calculation, room inventory parser, and price row parser.
-- `tourism_pricing_analytics/scraping/booking/failures.py`: failure classification for empty availability, selector drift, redirects, blocked/challenge pages, partial loads, and temporary Booking.com errors.
-- `tourism_pricing_analytics/scraping/booking/io.py`: run directories, logging setup, JSONL serialization, failure serialization, and DOM snapshot writing.
-- `tourism_pricing_analytics/scraping/booking/browser.py`: Playwright navigation, response status capture, cookie dismissal, page recovery, and scrolling helpers.
-- `tourism_pricing_analytics/scraping/booking/runner.py`: room inventory loop, price loop, structured failure recording, scraper orchestration, and `main()`.
+- `models.py`: scraper config, output dataclasses, failure categories, and failure records.
+- `config.py`: config loading.
+- `urls.py`: property URL, dated URL, room inventory URL, date window, and slug helpers.
+- `parsing.py`: price normalization, per-night calculation, room inventory parser, and price row parser.
+- `failures.py`: failure classification (empty availability, selector drift, redirects, blocked/challenge, partial load, temporary Booking.com error).
+- `io.py`: run directories, logging setup, JSONL serialization, failure serialization, validation-report persistence, and DOM snapshot writing.
+- `browser.py`: Playwright navigation, response status capture, cookie dismissal, page recovery, and scrolling helpers.
+- `runner.py`: room inventory loop, price loop, structured failure recording, post-run validation, scraper orchestration, and `main()`.
+- `validation.py`: structured run-output validation helpers and `RunValidationReport`.
+- `listings.py`: listings-page parser for deriving candidate scrape targets.
 
 ## Verification
 
 Latest local verification:
 
-- `python -m unittest tests.test_failure_classification` ran 10 tests OK.
-- `python -m unittest discover -s tests` ran 28 tests OK.
-- Full `python -m py_compile` sweep passed for the scraper entrypoint, config, package modules, and tests.
-- `git diff --check` passed before the latest fixture commit.
+- `python -m unittest discover -s tests` ran 66 tests OK.
+- Full `python -m py_compile` sweep passed for the scraper entrypoint, config, and new/changed package modules and tests.
+- `config.load_scraper_config()` loads the curated seven-property target set.
+- Validation helpers verified against real persisted output; `listings.parse_listings` verified against the real 7.6 MB `listings_chania.html` (438 candidates, all named, canonical URLs, priced).
 
 Latest rigorous live validation output:
 
-- Run directory: `saved_dom/runs/20260620_180133_503012`
+- Run directory: `saved_dom/runs/20260621_113326_377514` (run before the target-set curation, against Solimar Aquamarine and Elia Daliani).
 - Room inventory records: 7
-- Price row records: 82
-- Failure records: 17
-- Failure categories: 17 `empty_availability`
+- Price row records: 94
+- Failure records: 16 (all `empty_availability`, expected for sold-out near dates)
 - Duplicate inventory records: 0
 - Missing inventory fields: 0
-- Missing price dates: 0
-- Missing price room ids: 0
 - Nonpositive prices: 0
 - Bad per-night calculations: 0
 - Missing failure snapshots: 0
-- Log scan found no `ERROR`, `Traceback`, `exception`, or `failed` matches.
+- Price rows with null `room_id`: 1 (known carry-forward edge case)
+- `validation_report.json` written with `is_valid: true`, `issue_count: 0`; log showed the new "validation passed" line and no `ERROR`/`Traceback`/`exception`/`failed` matches.
 
 ## Recent Commits
 
-- `6883964 Add empty availability fixture`
-- `498e91a Refresh scraper hardening docs`
-- `19653ce Declare scraper dependencies`
-- `9cd37c7 Update session handoff notes`
-- `4970564 Document commit and testing discipline`
-- `fc1168a Add structured Booking scraper package`
+- `5ba68c4 Curate diverse scrape target set`
+- `4141fc6 Add listings page parser for property selection`
+- `b457723 Validate run output at end of each scrape`
+- `896665d Add structured run-output validation helpers`
+- `cfd12d2 Expand project README`
+- `82d1cc0 Update session handoff notes`
 
 ## What Remains
 
-- Add more representative Booking.com fixture pages for additional parser and failure-classification edge cases, especially selector drift and discounted rate rows.
-- Add structured run-output validation helpers for `saved_dom/runs/<timestamp>/` directories.
-- Promote durable data-quality checks for duplicate inventory records, missing price dates, missing room ids, nonpositive prices, and bad per-night calculations.
-- Run rigorous live validation after each meaningful scraper behavior phase before expanding the configured property set.
-- Review gaps in room matching, price normalization, and availability edge cases before scaling beyond the current small property list.
+- Run rigorous live validation against the new seven-property target set to confirm the curated URLs are reachable end to end and that `validation_report.json` lands clean for a larger, more varied scrape.
+- Capture a real discounted-rate row from the larger hotels/resorts and add a discounted-rate fixture plus parser coverage (still the main open fixture gap).
+- Add a selector-drift fixture and regression coverage.
+- Review room matching, price normalization, and availability edge cases before scaling beyond the curated property list, including whether the null `room_id` carry-forward case warrants a parser fix or a dedicated validator check.
+- Consider trimming the large `listings_chania.html` retention policy, or document why the full page is kept, since it is large generated HTML rather than a small fixture.
 
 ## Known Issues
 
-- The current fixtures cover useful real cases, but broader parser coverage still needs more representative Booking.com edge cases over time.
-- Live Booking.com DOM and availability behavior can change, so category heuristics should keep getting regression tests when new live cases appear.
-- Generated scrape outputs under `saved_dom/runs/` are useful for debugging but should stay local; promote only small representative HTML fixtures to `data/sample/raw_html/`.
-- Rows with null `room_id` should be reviewed before downstream modelling if they appear in future live output.
+- Fixtures cover useful real cases (normal listing, empty availability, trimmed listings page) but still lack selector-drift and discounted-rate examples.
+- Live Booking.com DOM and availability behavior can change; category and parser heuristics should keep getting regression tests as new live cases appear.
+- Generated scrape outputs under `saved_dom/runs/` should stay local; promote only small representative HTML to `data/sample/raw_html/`.
+- One price row in the latest live run had a null `room_id` (carry-forward when a price row precedes its room-type header). The run-output validator does not currently flag this; review before downstream modelling.
+- `listings_chania.html` is a 7.6 MB saved page; the listings parser is unit tested against the small `listings_chania_sample.html` instead.
+- The listing display name can differ from the URL slug (e.g. "Angellinas Apartments" maps to slug `ntountoulaki-maria`); the scraper keys on the URL, which is the stable identifier.
 
 ## Next Recommended Step
 
-Add structured run-output validation helpers for JSONL run directories, then cover them with unit tests. The first validator should check:
-
-- required run files exist: `room_inventory.jsonl`, `price_rows.jsonl`, `failures.jsonl`, and `scrape_debug.log`
-- JSONL files parse one record per line
-- room inventory has no duplicate `(property_url, room_id)` pairs
-- room inventory records do not have missing `room_id` or `room_name`
-- price rows do not have missing `checkin`, `checkout`, `stay_length_days`, or `captured_at`
-- prices are not negative or zero when a raw current price text is present
-- `price_per_night` matches `current_price_value / stay_length_days` when both values are present
-- failure categories are populated and referenced snapshot files exist when `snapshot_filename` is present
+Run a rigorous live validation scrape against the curated seven-property set (`python notebooks/property_page_scraper.py`). Confirm `validation_report.json` reports `is_valid: true`, review per-property room and price coverage, and harvest a discounted-rate row from the larger hotels/resorts to promote into a new discounted-rate fixture with parser regression tests.
