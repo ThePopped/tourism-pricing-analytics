@@ -5,7 +5,11 @@ from pathlib import Path
 
 from playwright.sync_api import BrowserContext, Page, Playwright, sync_playwright
 
-from tourism_pricing_analytics.scraping.booking.browser import ensure_page, navigate_to_page
+from tourism_pricing_analytics.scraping.booking.browser import (
+    ensure_page,
+    ensure_property_facilities_loaded,
+    navigate_to_page,
+)
 from tourism_pricing_analytics.scraping.booking.config import load_scraper_config
 from tourism_pricing_analytics.scraping.booking.failures import (
     PageFailureClassification,
@@ -227,11 +231,13 @@ def run_room_inventory_loop(
 
         records.extend(property_records)
 
-        # The undated property page is already scrolled here, so its facilities /
-        # subscores / surroundings sections are loaded: collect the date-stable
-        # property features now. Isolated so an extraction error never disrupts
-        # the inventory scrape.
+        # The undated property page is already scrolled here, so its subscores /
+        # surroundings sections are loaded. The whole-property facilities section
+        # (with the nested languages group) is lazy-loaded lower down, so bring it
+        # into view explicitly before collecting the date-stable property features.
+        # Isolated so an extraction error never disrupts the inventory scrape.
         try:
+            ensure_property_facilities_loaded(page)
             property_feature = extract_property_features(
                 page,
                 property_name=target.name,

@@ -24,6 +24,44 @@ def noisy_scroll(page: Page, scroll_config: ScrollConfig) -> None:
         human_pause(0.2, 0.5)
 
 
+# The whole-property facilities section (and the "Languages spoken" group nested
+# inside it) is lazy-loaded further down the page than the fixed-round
+# noisy_scroll reaches, so it stays empty unless we explicitly bring it into view.
+_FACILITIES_ANCHOR_SELECTORS = (
+    '[data-testid="property-facilities-block-container"]',
+    "#hp_facilities_box",
+)
+_FACILITIES_CONTENT_SELECTOR = '[data-testid="facility-group-container"]'
+
+
+def ensure_property_facilities_loaded(page: Page, timeout_ms: int = 3000) -> bool:
+    """Best-effort scroll the lazy-loaded facilities section into view.
+
+    Returns True once a facility group is attached. Never raises: a miss leaves
+    the property-feature extractors to record null, as designed.
+    """
+    for anchor_selector in _FACILITIES_ANCHOR_SELECTORS:
+        try:
+            anchor = page.locator(anchor_selector).first
+            if anchor.count() == 0:
+                continue
+            anchor.scroll_into_view_if_needed(timeout=timeout_ms)
+            human_pause(0.4, 0.9)
+            try:
+                page.locator(_FACILITIES_CONTENT_SELECTOR).first.wait_for(
+                    state="attached", timeout=timeout_ms
+                )
+            except Exception:
+                logging.debug("Facilities content did not attach after scroll", exc_info=True)
+            return page.locator(_FACILITIES_CONTENT_SELECTOR).count() > 0
+        except Exception:
+            logging.debug(
+                "Facilities scroll attempt failed for %s", anchor_selector, exc_info=True
+            )
+    logging.info("No facilities section anchor found to scroll into view")
+    return False
+
+
 def dismiss_cookie_banner(page: Page) -> bool:
     buttons_to_try = [
         page.get_by_role("button", name="Decline"),
