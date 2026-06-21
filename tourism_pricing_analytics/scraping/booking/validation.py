@@ -197,6 +197,19 @@ def validate_price_rows(records: list[dict], *, source: str) -> list[ValidationI
                     )
                 )
 
+        # room_id is the join key to room inventory and (downstream) room
+        # features. The parser recovers it from the block id prefix when the
+        # room-type header is absent, so a null here means neither source was
+        # usable and the row cannot be attributed to a room.
+        if _is_missing(record.get("room_id")):
+            issues.append(
+                ValidationIssue(
+                    check="price_row_room_id",
+                    message="Price row is missing room_id (no header and no usable block_id)",
+                    location=location,
+                )
+            )
+
         current_price_text = record.get("current_price_text")
         current_price_value = record.get("current_price_value")
 

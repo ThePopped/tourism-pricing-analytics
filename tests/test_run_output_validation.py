@@ -186,6 +186,14 @@ class PriceRowValidationTests(unittest.TestCase):
         )
         self.assertEqual(issues, [])
 
+    def test_detects_missing_room_id(self) -> None:
+        issues = validate_price_rows(
+            [_price_record(room_id=None)],
+            source="price_rows.jsonl",
+        )
+        checks = [issue.check for issue in issues]
+        self.assertIn("price_row_room_id", checks)
+
     def test_detects_inconsistent_price_per_night(self) -> None:
         issues = validate_price_rows(
             [_price_record(price_per_night=999.0)],

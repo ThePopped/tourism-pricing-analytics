@@ -194,5 +194,78 @@ class DiscountedRateFixtureTests(unittest.TestCase):
         self.assertEqual(breakfast_included.price_per_night, 200.5)
 
 
+class RoomIdRecoveryFixtureTests(unittest.TestCase):
+    """A price row that lacks a usable room-type header must still be attributed
+    to its room by recovering the room id from the ``data-block-id`` prefix,
+    rather than emitting a null ``room_id`` (the carry-forward edge case seen in
+    live runs). Uses a small synthetic table so no large fixture is required.
+    """
+
+    SYNTHETIC_HTML = """
+    <html><body><table><tbody>
+      <tr class="js-rt-block-row" data-block-id="555000111_222_0_1_0">
+        <th class="hprt-table-cell-roomtype">
+          <a class="hprt-roomtype-link">Studio Apartment</a>
+        </th>
+        <td class="hprt-table-cell-occupancy">2 adults</td>
+        <td class="hprt-table-cell-conditions">Free cancellation</td>
+        <td><div class="bui-price-display__value">&euro; 300</div></td>
+      </tr>
+      <tr class="js-rt-block-row" data-block-id="555000111_222_1_1_0">
+        <td class="hprt-table-cell-occupancy">2 adults</td>
+        <td class="hprt-table-cell-conditions">Non-refundable</td>
+        <td><div class="bui-price-display__value">&euro; 260</div></td>
+      </tr>
+    </tbody></table></body></html>
+    """
+
+    TARGET = PropertyTarget(
+        name="Synthetic Property",
+        url="https://www.booking.com/hotel/gr/synthetic.en-gb.html",
+    )
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.playwright = sync_playwright().start()
+        try:
+            cls.browser = cls.playwright.chromium.launch(headless=True)
+        except PlaywrightError as exc:
+            cls.playwright.stop()
+            raise unittest.SkipTest(f"Playwright browser is unavailable: {exc}") from exc
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        browser = getattr(cls, "browser", None)
+        if browser is not None:
+            browser.close()
+        playwright = getattr(cls, "playwright", None)
+        if playwright is not None:
+            playwright.stop()
+
+    def setUp(self) -> None:
+        self.page = self.browser.new_page()
+        self.page.set_content(self.SYNTHETIC_HTML, wait_until="domcontentloaded")
+
+    def tearDown(self) -> None:
+        self.page.close()
+
+    def test_room_id_recovered_from_block_id_when_header_missing(self) -> None:
+        records = extract_price_rows(
+            self.page,
+            target=self.TARGET,
+            checkin=date(2026, 7, 4),
+            checkout=date(2026, 7, 11),
+            lead_time_days=14,
+            stay_length_days=7,
+            captured_at=CAPTURED_AT,
+        )
+
+        self.assertEqual(len(records), 2)
+        # Both the header row (whose link carries no data-room-id) and the
+        # following headerless row resolve to the block-id room prefix.
+        self.assertEqual([record.room_id for record in records], ["555000111", "555000111"])
+        self.assertTrue(all(record.room_id is not None for record in records))
+
+
 if __name__ == "__main__":
     unittest.main()

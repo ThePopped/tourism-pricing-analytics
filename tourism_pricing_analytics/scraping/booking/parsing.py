@@ -63,6 +63,25 @@ def compute_price_per_night(total_price: float | None, stay_length_days: int) ->
     return round(total_price / stay_length_days, 2)
 
 
+def room_id_from_block_id(block_id: str | None) -> str | None:
+    """Recover the room id from a Booking ``data-block-id``.
+
+    Block ids are composite keys of the form ``{room_id}_{rate_plan}_...`` (for
+    example ``217097709_383286522_2_1_0``), so the leading numeric segment is the
+    room id. This lets a price row that precedes its room-type header row, or
+    whose header link is missing ``data-room-id``, still be attributed to its room
+    instead of carrying a null ``room_id`` downstream.
+    """
+
+    if not block_id:
+        return None
+
+    match = re.match(r"(\d+)_", block_id)
+    if match is None:
+        return None
+    return match.group(1)
+
+
 def get_locator_text(locator: Locator) -> str | None:
     try:
         if locator.count() == 0:
@@ -181,6 +200,12 @@ def extract_price_rows(
             current_price_value = normalize_price_text(current_price_text)
             original_price_value = normalize_price_text(original_price_text)
 
+            block_id = get_locator_attribute(row, "data-block-id")
+            # Prefer the carried-forward room id from the room-type header cell;
+            # fall back to the block id prefix when no header has been seen yet or
+            # its link lacked a room id, so the row is never left with a null room.
+            row_room_id = current_room_id or room_id_from_block_id(block_id)
+
             records.append(
                 PriceRowRecord(
                     property_name=target.name,
@@ -189,9 +214,9 @@ def extract_price_rows(
                     checkout=checkout.isoformat(),
                     lead_time_days=lead_time_days,
                     stay_length_days=stay_length_days,
-                    room_id=current_room_id,
+                    room_id=row_room_id,
                     room_name=current_room_name,
-                    block_id=get_locator_attribute(row, "data-block-id"),
+                    block_id=block_id,
                     occupancy_text=get_locator_text(row.locator(".hprt-table-cell-occupancy").first),
                     conditions_text=get_locator_text(row.locator(".hprt-table-cell-conditions").first),
                     scarcity_text=current_scarcity_text,

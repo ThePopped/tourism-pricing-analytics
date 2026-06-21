@@ -3,6 +3,7 @@ import unittest
 from tourism_pricing_analytics.scraping.booking.parsing import (
     compute_price_per_night,
     normalize_price_text,
+    room_id_from_block_id,
 )
 
 
@@ -33,6 +34,19 @@ class PriceParsingTests(unittest.TestCase):
     def test_compute_price_per_night_handles_missing_or_invalid_values(self) -> None:
         self.assertIsNone(compute_price_per_night(None, 4))
         self.assertIsNone(compute_price_per_night(1095.0, 0))
+
+
+class RoomIdFromBlockIdTests(unittest.TestCase):
+    def test_extracts_leading_room_id_segment(self) -> None:
+        self.assertEqual(room_id_from_block_id("217097709_383286522_2_1_0"), "217097709")
+
+    def test_handles_short_composite_key(self) -> None:
+        self.assertEqual(room_id_from_block_id("1377003802_409828619_0_2_0"), "1377003802")
+
+    def test_returns_none_for_missing_or_unparseable_values(self) -> None:
+        self.assertIsNone(room_id_from_block_id(None))
+        self.assertIsNone(room_id_from_block_id(""))
+        self.assertIsNone(room_id_from_block_id("no-leading-digits"))
 
 
 if __name__ == "__main__":
