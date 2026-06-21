@@ -22,6 +22,7 @@ from tourism_pricing_analytics.scraping.booking.io import (
     save_property_failures,
     save_property_price_rows,
     save_property_room_inventory,
+    save_validation_report,
     setup_logging,
 )
 from tourism_pricing_analytics.scraping.booking.models import (
@@ -41,6 +42,7 @@ from tourism_pricing_analytics.scraping.booking.urls import (
     build_dated_url,
     build_room_inventory_url,
 )
+from tourism_pricing_analytics.scraping.booking.validation import validate_run_directory
 
 
 ROOM_INVENTORY_SELECTOR = '[href^="#RD"]'
@@ -392,6 +394,29 @@ def run_price_loop(
     return page, records, failure_records
 
 
+def validate_and_report_run(run_dir: Path) -> None:
+    """Validate the persisted run output and write a validation_report.json.
+
+    Logs a clear pass/fail summary so post-run data-quality problems surface in
+    the scrape log instead of being discovered later downstream.
+    """
+
+    report = validate_run_directory(run_dir)
+    save_validation_report(report, run_dir / "validation_report.json")
+
+    if report.is_valid:
+        logging.info("Run output validation passed for %s", run_dir)
+        return
+
+    logging.warning(
+        "Run output validation found %d issue(s) for %s",
+        len(report.issues),
+        run_dir,
+    )
+    for check, count in sorted(report.issue_counts_by_check().items()):
+        logging.warning("Validation issues: %s=%d", check, count)
+
+
 def run(playwright: Playwright, scraper_config: ScraperConfig, run_dir: Path) -> None:
     browser = playwright.chromium.launch(
         headless=scraper_config.browser.headless,
@@ -457,6 +482,8 @@ def run(playwright: Playwright, scraper_config: ScraperConfig, run_dir: Path) ->
         logging.info("Room inventory records saved: %d", len(room_inventory_records))
         logging.info("Price row records saved: %d", len(price_row_records))
         logging.info("Failure records saved: %d", len(failure_records))
+
+        validate_and_report_run(run_dir)
 
         page = ensure_page(context, page)
         page.wait_for_timeout(scraper_config.timeouts.final_wait_ms)

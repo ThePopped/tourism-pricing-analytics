@@ -8,7 +8,7 @@ small fixtures and reused for post-run gating before data moves downstream.
 
 import json
 import math
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 
@@ -42,6 +42,24 @@ class RunValidationReport:
 
     def issues_for(self, check: str) -> list[ValidationIssue]:
         return [issue for issue in self.issues if issue.check == check]
+
+    def issue_counts_by_check(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for issue in self.issues:
+            counts[issue.check] = counts.get(issue.check, 0) + 1
+        return counts
+
+
+def report_to_dict(report: RunValidationReport) -> dict:
+    """Convert a validation report into a JSON-serializable dict."""
+
+    return {
+        "run_dir": str(report.run_dir),
+        "is_valid": report.is_valid,
+        "issue_count": len(report.issues),
+        "issue_counts_by_check": report.issue_counts_by_check(),
+        "issues": [asdict(issue) for issue in report.issues],
+    }
 
 
 def _is_missing(value: object) -> bool:

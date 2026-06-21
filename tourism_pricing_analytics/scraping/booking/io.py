@@ -13,6 +13,10 @@ from tourism_pricing_analytics.scraping.booking.models import (
     ScrapeFailureRecord,
 )
 from tourism_pricing_analytics.scraping.booking.urls import slugify
+from tourism_pricing_analytics.scraping.booking.validation import (
+    RunValidationReport,
+    report_to_dict,
+)
 
 
 def create_run_dir(output_root: Path) -> Path:
@@ -94,6 +98,11 @@ def save_property_failures(
         failure_records_to_dicts(records),
         output_dir / "failures.jsonl",
     )
+
+
+def save_validation_report(report: RunValidationReport, filepath: Path) -> Path:
+    content = json.dumps(report_to_dict(report), ensure_ascii=True, indent=2)
+    return save_text_file(content + "\n", filepath)
 
 
 def save_full_page_dom(

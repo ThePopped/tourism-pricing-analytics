@@ -5,7 +5,10 @@ from tempfile import TemporaryDirectory
 
 from tourism_pricing_analytics.scraping.booking.validation import (
     REQUIRED_RUN_FILES,
+    RunValidationReport,
+    ValidationIssue,
     load_jsonl_records,
+    report_to_dict,
     validate_failures,
     validate_price_rows,
     validate_room_inventory,
@@ -298,6 +301,71 @@ class ValidateRunDirectoryTests(unittest.TestCase):
                 "scrape_debug.log",
             },
         )
+
+
+class ReportSerializationTests(unittest.TestCase):
+    def test_report_to_dict_round_trips_through_json(self) -> None:
+        report = RunValidationReport(
+            run_dir=Path("saved_dom/runs/example"),
+            issues=[
+                ValidationIssue(
+                    check="price_row_fields",
+                    message="Price row is missing checkin",
+                    location="price_rows.jsonl:2",
+                ),
+                ValidationIssue(
+                    check="price_row_fields",
+                    message="Price row is missing checkout",
+                    location="price_rows.jsonl:3",
+                ),
+            ],
+        )
+        payload = json.loads(json.dumps(report_to_dict(report)))
+        self.assertFalse(payload["is_valid"])
+        self.assertEqual(payload["issue_count"], 2)
+        self.assertEqual(payload["issue_counts_by_check"], {"price_row_fields": 2})
+        self.assertEqual(len(payload["issues"]), 2)
+
+    def test_valid_report_serializes_clean(self) -> None:
+        report = RunValidationReport(run_dir=Path("saved_dom/runs/example"))
+        payload = report_to_dict(report)
+        self.assertTrue(payload["is_valid"])
+        self.assertEqual(payload["issue_count"], 0)
+        self.assertEqual(payload["issues"], [])
+
+
+class ValidateAndReportRunTests(unittest.TestCase):
+    def test_writes_report_and_logs_pass(self) -> None:
+        from tourism_pricing_analytics.scraping.booking.runner import validate_and_report_run
+
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            _write_valid_run(run_dir)
+            with self.assertLogs(level="INFO") as captured:
+                validate_and_report_run(run_dir)
+            report_path = run_dir / "validation_report.json"
+            self.assertTrue(report_path.is_file())
+            payload = json.loads(report_path.read_text(encoding="utf-8"))
+        self.assertTrue(payload["is_valid"])
+        self.assertTrue(any("validation passed" in line for line in captured.output))
+
+    def test_writes_report_and_logs_warning_on_issues(self) -> None:
+        from tourism_pricing_analytics.scraping.booking.runner import validate_and_report_run
+
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            _write_jsonl(run_dir / "room_inventory.jsonl", [_room_record(), _room_record()])
+            _write_jsonl(run_dir / "price_rows.jsonl", [_price_record()])
+            _write_jsonl(run_dir / "failures.jsonl", [_failure_record()])
+            (run_dir / "scrape_debug.log").write_text("ok\n", encoding="utf-8")
+            with self.assertLogs(level="WARNING") as captured:
+                validate_and_report_run(run_dir)
+            payload = json.loads(
+                (run_dir / "validation_report.json").read_text(encoding="utf-8")
+            )
+        self.assertFalse(payload["is_valid"])
+        self.assertIn("room_inventory_duplicates", payload["issue_counts_by_check"])
+        self.assertTrue(any("validation found" in line for line in captured.output))
 
 
 if __name__ == "__main__":
