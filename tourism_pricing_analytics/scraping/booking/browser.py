@@ -97,7 +97,8 @@ def navigate_to_page(
 ) -> int | None:
     logging.info("Navigating to %s", url)
     response = page.goto(url, wait_until="domcontentloaded")
-    human_pause(1.0, 2.0)
+    pauses = scraper_config.pauses
+    human_pause(pauses.post_nav_min_ms / 1000, pauses.post_nav_max_ms / 1000)
     dismiss_cookie_banner(page)
     if scroll_page:
         noisy_scroll(page, scraper_config.scroll)

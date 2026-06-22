@@ -1,5 +1,8 @@
+import json
+import tempfile
 import unittest
 from datetime import date
+from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from config import CONFIG_DIR, ROOT
@@ -32,6 +35,16 @@ class ScraperConfigAndUrlTests(unittest.TestCase):
         self.assertEqual(scraper_config.lead_times, [1, 7, 14, 30, 60])
         self.assertEqual(scraper_config.stay_lengths, [4, 7, 14])
 
+    def test_load_scraper_config_reads_post_nav_pause(self) -> None:
+        scraper_config = load_scraper_config()
+
+        self.assertEqual(scraper_config.pauses.post_nav_min_ms, 300)
+        self.assertEqual(scraper_config.pauses.post_nav_max_ms, 800)
+        self.assertLessEqual(
+            scraper_config.pauses.post_nav_min_ms,
+            scraper_config.pauses.post_nav_max_ms,
+        )
+
     def test_full_chania_config_uses_scale_up_matrix_and_speed_settings(self) -> None:
         scraper_config = load_scraper_config(
             CONFIG_DIR / "booking_scraper_config_chania_full.json"
@@ -50,6 +63,19 @@ class ScraperConfigAndUrlTests(unittest.TestCase):
         for url in urls:
             self.assertNotIn("?", url)
             self.assertTrue(url.startswith("https://www.booking.com/hotel/"))
+
+    def test_load_scraper_config_defaults_pause_when_section_absent(self) -> None:
+        raw = json.loads(
+            (CONFIG_DIR / "booking_scraper_config.json").read_text(encoding="utf-8")
+        )
+        raw.pop("pauses", None)
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "no_pauses.json"
+            config_path.write_text(json.dumps(raw), encoding="utf-8")
+            scraper_config = load_scraper_config(config_path)
+
+        self.assertEqual(scraper_config.pauses.post_nav_min_ms, 300)
+        self.assertEqual(scraper_config.pauses.post_nav_max_ms, 800)
 
     def test_build_date_window_uses_fixed_base_date_offsets(self) -> None:
         checkin, checkout = build_date_window(

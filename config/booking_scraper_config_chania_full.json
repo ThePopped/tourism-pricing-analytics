@@ -28,6 +28,10 @@
     "opened_scan_wait_ms": 1500,
     "final_wait_ms": 3000
   },
+  "pauses": {
+    "post_nav_min_ms": 300,
+    "post_nav_max_ms": 800
+  },
   "scroll": {
     "rounds": 2,
     "min_delta": 120,

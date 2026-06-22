@@ -52,6 +52,19 @@ class ScrollConfig:
 
 
 @dataclass(frozen=True)
+class PauseConfig:
+    """Jittered politeness pauses, in milliseconds.
+
+    ``post_nav`` is the dwell applied right after a ``goto`` before interacting
+    with the page. It keeps a randomized range (not a fixed value) so traffic
+    stays human-like even when tuned small for the scale-up run.
+    """
+
+    post_nav_min_ms: int = 300
+    post_nav_max_ms: int = 800
+
+
+@dataclass(frozen=True)
 class PropertyTarget:
     name: str
     url: str
@@ -69,6 +82,7 @@ class ScraperConfig:
     scroll: ScrollConfig
     common_opened_selectors: list[str]
     properties: list[PropertyTarget]
+    pauses: PauseConfig = field(default_factory=PauseConfig)
 
 
 @dataclass(frozen=True)
