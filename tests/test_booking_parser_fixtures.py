@@ -5,10 +5,17 @@ from pathlib import Path
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import sync_playwright
 
+from tourism_pricing_analytics.scraping.booking.failures import classify_page_failure
 from tourism_pricing_analytics.scraping.booking.models import PropertyTarget
 from tourism_pricing_analytics.scraping.booking.parsing import (
     extract_price_rows,
     extract_room_inventory,
+)
+from tourism_pricing_analytics.scraping.booking.runner import (
+    PRICE_ROW_FALLBACK_SELECTORS,
+    PRICE_ROW_SELECTOR,
+    ROOM_INVENTORY_FALLBACK_SELECTORS,
+    ROOM_INVENTORY_SELECTOR,
 )
 
 
@@ -332,6 +339,155 @@ class GenericBlockRoomNameFixtureTests(unittest.TestCase):
         record = records[0]
         self.assertIsNone(record.room_id)
         self.assertEqual(record.room_name, "Deluxe Double Room")
+
+
+class SelectorDriftFixtureTests(unittest.TestCase):
+    """A fully-loaded Booking.com property page whose availability widget has
+    drifted: the room-inventory anchors, the price-row table rows, and every
+    fallback selector were renamed in a hypothetical redesign, so the parser
+    yields zero records even though the page is intact.
+
+    This must classify as ``selector_drift`` — distinct from
+    ``empty_availability`` (sold-out text) and ``partial_load`` (a truncated
+    page) — so a silent Booking.com DOM change is surfaced as drift rather than
+    mistaken for a legitimately empty result. The page keeps recognizable
+    property-page text (Property highlights, Guest reviews, Facilities, room
+    type) so it is classified by content, not by a stray fallback selector.
+    Synthetic so no large page is committed.
+    """
+
+    TARGET = PropertyTarget(
+        name="Drifted Hotel",
+        url="https://www.booking.com/hotel/gr/drifted.en-gb.html",
+    )
+    REQUESTED_URL = TARGET.url + "?checkin=2026-07-04&checkout=2026-07-11"
+
+    DRIFTED_HTML = """
+    <html><head><title>Drifted Hotel, Crete – Booking.com</title></head>
+    <body>
+      <header>Booking.com</header>
+      <h1>Drifted Hotel</h1>
+      <section><h2>Property highlights</h2>
+        <p>Top location near the old town, moments from the beach, with free
+           WiFi throughout the property and private parking on site.</p></section>
+      <section><h2>Guest reviews</h2>
+        <p>Rated wonderful by recent guests, who praised the cleanliness, the
+           comfortable beds, and the friendly, helpful staff at reception.</p>
+      </section>
+      <section><h2>Facilities</h2>
+        <ul><li>Outdoor swimming pool</li><li>Spa and wellness centre</li>
+            <li>Airport shuttle service</li><li>Family rooms available</li>
+            <li>Restaurant and bar on site</li></ul></section>
+      <section id="rooms"><h2>Choose your room type</h2>
+        <p>Pick a room type for your stay using the options below.</p>
+        <!-- Availability widget after a hypothetical Booking redesign: every
+             previously-stable class, id, and anchor scheme has been renamed,
+             so neither the primary nor the fallback selectors match. -->
+        <table class="roomstable-v3">
+          <tbody>
+            <tr class="room-offer-row">
+              <th class="room-heading">
+                <a class="room-name-link" href="#room-217097709">Classic Room</a>
+              </th>
+              <td class="guests">2 adults</td>
+              <td class="rate-conditions">Free cancellation</td>
+              <td><div class="rate-amount">&euro; 122</div></td>
+            </tr>
+            <tr class="room-offer-row">
+              <th class="room-heading">
+                <a class="room-name-link" href="#room-217097704">Deluxe Room</a>
+              </th>
+              <td class="guests">2 adults</td>
+              <td class="rate-conditions">Non-refundable</td>
+              <td><div class="rate-amount">&euro; 213</div></td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+    </body></html>
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.playwright = sync_playwright().start()
+        try:
+            cls.browser = cls.playwright.chromium.launch(headless=True)
+        except PlaywrightError as exc:
+            cls.playwright.stop()
+            raise unittest.SkipTest(f"Playwright browser is unavailable: {exc}") from exc
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        browser = getattr(cls, "browser", None)
+        if browser is not None:
+            browser.close()
+        playwright = getattr(cls, "playwright", None)
+        if playwright is not None:
+            playwright.stop()
+
+    def setUp(self) -> None:
+        self.page = self.browser.new_page()
+        self.page.set_content(self.DRIFTED_HTML, wait_until="domcontentloaded")
+
+    def tearDown(self) -> None:
+        self.page.close()
+
+    def test_drifted_page_yields_no_records(self) -> None:
+        inventory = extract_room_inventory(
+            self.page,
+            target=self.TARGET,
+            property_url=self.TARGET.url,
+            captured_at=CAPTURED_AT,
+        )
+        self.assertEqual(inventory, [])
+
+        price_rows = extract_price_rows(
+            self.page,
+            target=self.TARGET,
+            checkin=date(2026, 7, 4),
+            checkout=date(2026, 7, 11),
+            lead_time_days=14,
+            stay_length_days=7,
+            captured_at=CAPTURED_AT,
+        )
+        self.assertEqual(price_rows, [])
+
+    def _classify_drift(self, expected_selector: str, fallback_selectors: list[str]):
+        """Classify the loaded page using selector counts taken from the live
+        browser DOM (the same counting the runner does), with a non-redirected
+        final URL so the drift signal is isolated from the redirect check."""
+        expected_count = self.page.locator(expected_selector).count()
+        fallback_count = sum(
+            self.page.locator(selector).count() for selector in fallback_selectors
+        )
+        # The drift is concrete: neither the primary nor any fallback selector
+        # matches this redesigned DOM, yet the page is fully loaded.
+        self.assertEqual(expected_count, 0)
+        self.assertEqual(fallback_count, 0)
+        return classify_page_failure(
+            self.page.content(),
+            final_url=self.REQUESTED_URL,
+            requested_url=self.REQUESTED_URL,
+            expected_selector_count=expected_count,
+            fallback_selector_count=fallback_count,
+            status_code=200,
+        )
+
+    def test_room_inventory_failure_classifies_as_selector_drift(self) -> None:
+        classification = self._classify_drift(
+            ROOM_INVENTORY_SELECTOR, ROOM_INVENTORY_FALLBACK_SELECTORS
+        )
+
+        self.assertIsNotNone(classification)
+        self.assertEqual(classification.category, "selector_drift")
+
+    def test_price_row_failure_classifies_as_selector_drift(self) -> None:
+        classification = self._classify_drift(
+            PRICE_ROW_SELECTOR, PRICE_ROW_FALLBACK_SELECTORS
+        )
+
+        self.assertIsNotNone(classification)
+        self.assertEqual(classification.category, "selector_drift")
 
 
 if __name__ == "__main__":
