@@ -293,9 +293,22 @@ Test files:
 
 Current fixture coverage:
 
-- `data/sample/raw_html/elia_palatino_listing_page.html`: room inventory and dated price-row parser coverage.
+- `data/sample/raw_html/elia_palatino_listing_page.html` (~2 MB): room inventory,
+  dated price-row, and room/property feature-extractor coverage. Kept as a full
+  page on purpose — `test_booking_parser_fixtures.py`,
+  `test_room_feature_extractors.py`, and `test_property_feature_extractors.py`
+  assert exact extracted values, which need the complete availability widget,
+  facilities section, and surroundings/policies blocks intact.
+- `data/sample/raw_html/selected_suites_discounted_page.html` (~1.8 MB): full
+  page backing discounted/price-row and room-feature exact-value regression
+  tests; kept whole for the same reason.
 - `data/sample/raw_html/elia_daliani_empty_availability.html`: compact empty-availability failure-classification coverage.
-- `data/sample/raw_html/listings_chania.html`: saved listing-page sample for exploration.
+- `data/sample/raw_html/listings_chania_sample.html`: trimmed listing-page
+  fixture used by `test_listings_parser.py`.
+- The full region dump `listings_chania.html` (7.6 MB) is **not committed** — it
+  is only used for ad-hoc notebook exploration (whose findings are already saved
+  in `notebooks/exploring_listings.ipynb`), so it is git-ignored and kept
+  local-only rather than carried in the repo.
 
 Phase-completion rule:
 
