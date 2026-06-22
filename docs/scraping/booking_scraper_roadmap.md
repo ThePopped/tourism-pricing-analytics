@@ -305,10 +305,20 @@ Avoid doing these in the same refactor unless they become necessary:
 
 ## Status
 
-Planned and approved; **not yet implemented**. The foundational build,
-feature-extraction layer, and the 15-property broadening (live-validated against
-run `20260622_105842_988147`) are done. This pass scales the configured set to
-the full Chania candidate list while keeping the run reliable.
+Underway. The foundational build, feature-extraction layer, and the 15-property
+broadening (live-validated against run `20260622_105842_988147`) are done.
+Scale-Up Phases 0-2 are complete:
+
+- Phase 0: `config/booking_scraper_config_chania_full.json` generated from the
+  438-property Chania candidate CSV with the reduced price matrix and speed
+  settings.
+- Phase 1: the fixed post-navigation pause was replaced with a smaller
+  config-driven jittered pause.
+- Phase 2: artifact-based resumability was added with per-property completion
+  checks, incremental per-property failure persistence, and aggregate stream
+  rebuilding from per-property artifacts.
+
+The next implementation step is Phase 3, retry with backoff.
 
 ## Objective
 
@@ -356,21 +366,43 @@ policy above.
 - Generate `config/booking_scraper_config_chania_full.json` from
   `listings_chania_candidates.csv`: normalize/dedupe the 438 URLs, apply the
   reduced matrix and speed settings. The validated 15-property
-  `booking_scraper_config.json` baseline is left untouched.
+  `booking_scraper_config.json` baseline is left untouched. (Done, commit
+  `4b5dcac`.)
 
 ### Phase 1 — Speed & politeness (config + minimal `browser.py`)
 - `headless: true`, `slow_mo_ms: 0`, and convert the fixed post-`goto`
   `human_pause(1.0, 2.0)` into a smaller config-driven jittered pause (retain
   some jitter for politeness). Target ~5.8 → ~3.3 s/navigation.
-- New config field → config-loading test.
+- New config field → config-loading test. (Done, commit `27fef9a`.)
 
 ### Phase 2 — Resumability
-- Pure `pending_targets(run_dir, targets)` helper that skips properties whose
-  per-property output directory is already complete, so a blocked/crashed run
-  resumes rather than restarts. Unit-tested on a temp directory.
+- Add a pure resumability layer, likely
+  `tourism_pricing_analytics/scraping/booking/resume.py`, that can identify
+  completed properties without touching the browser. At minimum:
+  `expected_property_dir(run_dir, index, target)`, `expected_price_windows(...)`,
+  `is_property_complete(...)`, and `pending_targets(...)`. (Done.)
+- Do **not** treat per-property directory existence as completion. The runner
+  prepares every property directory up front, so a directory alone proves only
+  that the run was initialized. (Done.)
+- Completion rule: a property is complete only when room inventory has a
+  terminal artifact and every configured price window has either successful
+  price rows or a terminal failure record. This must handle genuinely sold-out
+  properties such as Royal Sun and Lucia, where inventory exists and every price
+  window is `empty_availability`, without requiring a per-property
+  `price_rows.jsonl`. (Done.)
+- Add crash-resistant progress evidence before relying on the predicate:
+  either persist per-property failure records incrementally as each property
+  finishes, or write a small per-property completion/progress marker. Without
+  this, a hard crash can leave snapshots but no structured failure records to
+  prove which windows reached a terminal state. (Done via incremental
+  per-property failure persistence.)
+- Unit-test with temporary run directories covering: missing directory,
+  directory-only, inventory-only, successful price rows, all-empty sold-out
+  property, partial price windows, and transient failures that must remain
+  pending until Phase 3 retry policy handles them. (Done.)
 
 ### Phase 3 — Retry with backoff
-- Pure `should_retry(category, attempt)` plus a retry wrapper so `blocked_page`,
+- Pure `should_retry(category, attempt)` plus a retry wrapper so `blocked_challenge`,
   `temporary_booking_error`, and `navigation_error` get K retries with
   exponential backoff + jitter before being recorded as failures.
   `empty_availability` and `selector_drift` are never retried. Unit-tested.
@@ -383,8 +415,10 @@ policy above.
 - Light refactor of `run()` / `main()` to accept a target slice + shared run dir
   and skip final aggregation when running as a worker (the driver owns
   aggregation and validation). Parsers and feature extractors are reused
-  unchanged. Stdlib only (`multiprocessing`, backoff) — no new `pyproject.toml`
-  dependencies. Shard-split and merge helpers are pure and unit-tested.
+  unchanged. The driver should use the Phase 2 completion predicate rather than
+  directory existence when deciding which targets remain pending. Stdlib only
+  (`multiprocessing`, backoff) — no new `pyproject.toml` dependencies.
+  Shard-split and merge helpers are pure and unit-tested.
 
 ### Phase 5 — Staged live validation, then full run
 - Pilot ~50 properties first (resume makes the pilot count toward the full run)
@@ -414,3 +448,8 @@ A scale-up run is **not** considered done until it satisfies, in addition to
    after Layer 2 name→id reconciliation is reported and reviewed (the known
    "bbasic" reworded-label limitation; 3/421 in the 15-property run), rather
    than silently carried into modelling.
+4. **Resumability evidence.** For every configured property, the run has
+   machine-readable per-property evidence that inventory reached a terminal
+   state and each configured price window reached either a successful rows state
+   or a terminal failure state. Directory existence alone is not accepted as
+   proof of completion.

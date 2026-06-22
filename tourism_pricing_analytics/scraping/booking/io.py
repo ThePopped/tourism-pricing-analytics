@@ -30,7 +30,7 @@ def create_run_dir(output_root: Path) -> Path:
 
 def create_property_output_dir(run_dir: Path, property_index: int, target: PropertyTarget) -> Path:
     property_dir = run_dir / f"{property_index:03d}_{slugify(target.name)}"
-    property_dir.mkdir(parents=True, exist_ok=False)
+    property_dir.mkdir(parents=True, exist_ok=True)
     return property_dir
 
 
@@ -58,6 +58,19 @@ def save_jsonl_file(records: list[dict], filepath: Path) -> Path:
     if lines:
         content += "\n"
     return save_text_file(content, filepath)
+
+
+def append_jsonl_file(records: list[dict], filepath: Path) -> Path:
+    lines = [json.dumps(record, ensure_ascii=True) for record in records]
+    if not lines:
+        return filepath
+
+    filepath.parent.mkdir(parents=True, exist_ok=True)
+    with filepath.open("a", encoding="utf-8") as handle:
+        handle.write("\n".join(lines))
+        handle.write("\n")
+    logging.info("appended file: %s", filepath)
+    return filepath
 
 
 def room_inventory_records_to_dicts(records: list[RoomInventoryRecord]) -> list[dict]:
@@ -105,6 +118,16 @@ def save_property_failures(
     output_dir: Path,
 ) -> Path:
     return save_jsonl_file(
+        failure_records_to_dicts(records),
+        output_dir / "failures.jsonl",
+    )
+
+
+def append_property_failures(
+    records: list[ScrapeFailureRecord],
+    output_dir: Path,
+) -> Path:
+    return append_jsonl_file(
         failure_records_to_dicts(records),
         output_dir / "failures.jsonl",
     )

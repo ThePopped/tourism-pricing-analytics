@@ -1,5 +1,6 @@
 import logging
 import random
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -20,13 +21,9 @@ from tourism_pricing_analytics.scraping.booking.features.extract_property import
     extract_property_features,
 )
 from tourism_pricing_analytics.scraping.booking.io import (
+    append_property_failures,
     create_property_output_dir,
     create_run_dir,
-    failure_records_to_dicts,
-    price_row_records_to_dicts,
-    property_feature_records_to_dicts,
-    room_feature_records_to_dicts,
-    room_inventory_records_to_dicts,
     save_full_page_dom,
     save_jsonl_file,
     save_property_failures,
@@ -51,12 +48,16 @@ from tourism_pricing_analytics.scraping.booking.parsing import (
     extract_price_rows,
     extract_room_inventory,
 )
+from tourism_pricing_analytics.scraping.booking.resume import pending_targets
 from tourism_pricing_analytics.scraping.booking.urls import (
     build_date_window,
     build_dated_url,
     build_room_inventory_url,
 )
-from tourism_pricing_analytics.scraping.booking.validation import validate_run_directory
+from tourism_pricing_analytics.scraping.booking.validation import (
+    load_jsonl_records,
+    validate_run_directory,
+)
 
 
 ROOM_INVENTORY_SELECTOR = '[href^="#RD"]'
@@ -189,6 +190,7 @@ def run_room_inventory_loop(
     for target in scraper_config.properties:
         property_url = build_room_inventory_url(target.url)
         output_dir = property_output_dirs[target.url]
+        property_failure_records: list[ScrapeFailureRecord] = []
         page = ensure_page(context, page)
         status_code: int | None = None
         navigation_completed = False
@@ -212,20 +214,21 @@ def run_room_inventory_loop(
             )
             filename = f"room_inventory_{classification.category}.html"
             snapshot_filename = save_failure_snapshot(page, output_dir, filename)
-            failure_records.append(
-                build_failure_record(
-                    target_name=target.name,
-                    target_url=target.url,
-                    scrape_stage="room_inventory",
-                    classification=classification,
-                    requested_url=property_url,
-                    final_url=get_page_url(page),
-                    captured_at=captured_at,
-                    status_code=status_code,
-                    snapshot_filename=snapshot_filename,
-                    exception=exc,
-                )
+            failure_record = build_failure_record(
+                target_name=target.name,
+                target_url=target.url,
+                scrape_stage="room_inventory",
+                classification=classification,
+                requested_url=property_url,
+                final_url=get_page_url(page),
+                captured_at=captured_at,
+                status_code=status_code,
+                snapshot_filename=snapshot_filename,
+                exception=exc,
             )
+            failure_records.append(failure_record)
+            property_failure_records.append(failure_record)
+            append_property_failures(property_failure_records, output_dir)
             page = None
             continue
 
@@ -266,19 +269,20 @@ def run_room_inventory_loop(
             )
             filename = f"room_inventory_{classification.category}.html"
             snapshot_filename = save_failure_snapshot(page, output_dir, filename)
-            failure_records.append(
-                build_failure_record(
-                    target_name=target.name,
-                    target_url=target.url,
-                    scrape_stage="room_inventory",
-                    classification=classification,
-                    requested_url=property_url,
-                    final_url=get_page_url(page),
-                    captured_at=captured_at,
-                    status_code=status_code,
-                    snapshot_filename=snapshot_filename,
-                )
+            failure_record = build_failure_record(
+                target_name=target.name,
+                target_url=target.url,
+                scrape_stage="room_inventory",
+                classification=classification,
+                requested_url=property_url,
+                final_url=get_page_url(page),
+                captured_at=captured_at,
+                status_code=status_code,
+                snapshot_filename=snapshot_filename,
             )
+            failure_records.append(failure_record)
+            property_failure_records.append(failure_record)
+            append_property_failures(property_failure_records, output_dir)
             continue
 
         save_property_room_inventory(property_records, output_dir)
@@ -304,6 +308,7 @@ def run_price_loop(
     for target in scraper_config.properties:
         output_dir = property_output_dirs[target.url]
         property_records: list[PriceRowRecord] = []
+        property_failure_records: list[ScrapeFailureRecord] = []
         # Room features are date-stable, so collect each room once across all
         # date windows, keyed by room_id, to maximise coverage if availability
         # differs between windows.
@@ -362,24 +367,24 @@ def run_price_loop(
                         f"_stay_{stay_length_days:03d}.html"
                     )
                     snapshot_filename = save_failure_snapshot(page, output_dir, filename)
-                    failure_records.append(
-                        build_failure_record(
-                            target_name=target.name,
-                            target_url=target.url,
-                            scrape_stage="price_rows",
-                            classification=classification,
-                            requested_url=dated_url,
-                            final_url=get_page_url(page),
-                            checkin=checkin.isoformat(),
-                            checkout=checkout.isoformat(),
-                            lead_time_days=lead_time_days,
-                            stay_length_days=stay_length_days,
-                            captured_at=captured_at,
-                            status_code=status_code,
-                            snapshot_filename=snapshot_filename,
-                            exception=exc,
-                        )
+                    failure_record = build_failure_record(
+                        target_name=target.name,
+                        target_url=target.url,
+                        scrape_stage="price_rows",
+                        classification=classification,
+                        requested_url=dated_url,
+                        final_url=get_page_url(page),
+                        checkin=checkin.isoformat(),
+                        checkout=checkout.isoformat(),
+                        lead_time_days=lead_time_days,
+                        stay_length_days=stay_length_days,
+                        captured_at=captured_at,
+                        status_code=status_code,
+                        snapshot_filename=snapshot_filename,
+                        exception=exc,
                     )
+                    failure_records.append(failure_record)
+                    property_failure_records.append(failure_record)
                     page = None
                     continue
 
@@ -421,23 +426,23 @@ def run_price_loop(
                         f"_stay_{stay_length_days:03d}.html"
                     )
                     snapshot_filename = save_failure_snapshot(page, output_dir, filename)
-                    failure_records.append(
-                        build_failure_record(
-                            target_name=target.name,
-                            target_url=target.url,
-                            scrape_stage="price_rows",
-                            classification=classification,
-                            requested_url=dated_url,
-                            final_url=get_page_url(page),
-                            checkin=checkin.isoformat(),
-                            checkout=checkout.isoformat(),
-                            lead_time_days=lead_time_days,
-                            stay_length_days=stay_length_days,
-                            captured_at=captured_at,
-                            status_code=status_code,
-                            snapshot_filename=snapshot_filename,
-                        )
+                    failure_record = build_failure_record(
+                        target_name=target.name,
+                        target_url=target.url,
+                        scrape_stage="price_rows",
+                        classification=classification,
+                        requested_url=dated_url,
+                        final_url=get_page_url(page),
+                        checkin=checkin.isoformat(),
+                        checkout=checkout.isoformat(),
+                        lead_time_days=lead_time_days,
+                        stay_length_days=stay_length_days,
+                        captured_at=captured_at,
+                        status_code=status_code,
+                        snapshot_filename=snapshot_filename,
                     )
+                    failure_records.append(failure_record)
+                    property_failure_records.append(failure_record)
 
         if property_records:
             save_property_price_rows(property_records, output_dir)
@@ -456,6 +461,9 @@ def run_price_loop(
                 len(property_features),
                 target.name,
             )
+
+        if property_failure_records:
+            append_property_failures(property_failure_records, output_dir)
 
     return page, records, room_feature_records, failure_records
 
@@ -483,6 +491,27 @@ def validate_and_report_run(run_dir: Path) -> None:
         logging.warning("Validation issues: %s=%d", check, count)
 
 
+def load_property_artifact_records(
+    property_output_dirs: dict[str, Path],
+    filename: str,
+) -> list[dict]:
+    records: list[dict] = []
+    for output_dir in property_output_dirs.values():
+        artifact_path = output_dir / filename
+        if not artifact_path.exists():
+            continue
+        artifact_records, issues = load_jsonl_records(artifact_path)
+        if issues:
+            logging.warning(
+                "Skipping malformed per-property artifact %s with %d parse issue(s)",
+                artifact_path,
+                len(issues),
+            )
+            continue
+        records.extend(artifact_records)
+    return records
+
+
 def run(playwright: Playwright, scraper_config: ScraperConfig, run_dir: Path) -> None:
     browser = playwright.chromium.launch(
         headless=scraper_config.browser.headless,
@@ -499,16 +528,32 @@ def run(playwright: Playwright, scraper_config: ScraperConfig, run_dir: Path) ->
         )
         page = context.new_page()
 
+        all_properties = scraper_config.properties
+        pending_properties = pending_targets(
+            run_dir,
+            all_properties,
+            scraper_config.lead_times,
+            scraper_config.stay_lengths,
+        )
+        skipped_count = len(all_properties) - len(pending_properties)
+        if skipped_count:
+            logging.info(
+                "Skipping %d completed properties based on persisted artifacts",
+                skipped_count,
+            )
+
+        active_config = replace(scraper_config, properties=pending_properties)
+
         property_output_dirs = {
             target.url: create_property_output_dir(run_dir, index, target)
-            for index, target in enumerate(scraper_config.properties, start=1)
+            for index, target in enumerate(all_properties, start=1)
         }
 
-        for index, target in enumerate(scraper_config.properties, start=1):
+        for index, target in enumerate(all_properties, start=1):
             logging.info(
                 "Prepared property %d/%d output directory: %s",
                 index,
-                len(scraper_config.properties),
+                len(all_properties),
                 property_output_dirs[target.url],
             )
 
@@ -520,37 +565,17 @@ def run(playwright: Playwright, scraper_config: ScraperConfig, run_dir: Path) ->
         ) = run_room_inventory_loop(
             context=context,
             page=page,
-            scraper_config=scraper_config,
+            scraper_config=active_config,
             property_output_dirs=property_output_dirs,
         )
         page, price_row_records, room_feature_records, price_row_failures = run_price_loop(
             context=context,
             page=page,
-            scraper_config=scraper_config,
+            scraper_config=active_config,
             property_output_dirs=property_output_dirs,
         )
         failure_records = room_inventory_failures + price_row_failures
 
-        save_jsonl_file(
-            room_inventory_records_to_dicts(room_inventory_records),
-            run_dir / "room_inventory.jsonl",
-        )
-        save_jsonl_file(
-            price_row_records_to_dicts(price_row_records),
-            run_dir / "price_rows.jsonl",
-        )
-        save_jsonl_file(
-            room_feature_records_to_dicts(room_feature_records),
-            run_dir / "room_features.jsonl",
-        )
-        save_jsonl_file(
-            property_feature_records_to_dicts(property_feature_records),
-            run_dir / "property_features.jsonl",
-        )
-        save_jsonl_file(
-            failure_records_to_dicts(failure_records),
-            run_dir / "failures.jsonl",
-        )
         for target in scraper_config.properties:
             property_failures = [
                 record for record in failure_records if record.property_url == target.url
@@ -558,11 +583,38 @@ def run(playwright: Playwright, scraper_config: ScraperConfig, run_dir: Path) ->
             if property_failures:
                 save_property_failures(property_failures, property_output_dirs[target.url])
 
-        logging.info("Room inventory records saved: %d", len(room_inventory_records))
-        logging.info("Price row records saved: %d", len(price_row_records))
-        logging.info("Room feature records saved: %d", len(room_feature_records))
-        logging.info("Property feature records saved: %d", len(property_feature_records))
-        logging.info("Failure records saved: %d", len(failure_records))
+        room_inventory_dicts = load_property_artifact_records(
+            property_output_dirs,
+            "room_inventory.jsonl",
+        )
+        price_row_dicts = load_property_artifact_records(
+            property_output_dirs,
+            "price_rows.jsonl",
+        )
+        room_feature_dicts = load_property_artifact_records(
+            property_output_dirs,
+            "room_features.jsonl",
+        )
+        property_feature_dicts = load_property_artifact_records(
+            property_output_dirs,
+            "property_features.jsonl",
+        )
+        failure_dicts = load_property_artifact_records(
+            property_output_dirs,
+            "failures.jsonl",
+        )
+
+        save_jsonl_file(room_inventory_dicts, run_dir / "room_inventory.jsonl")
+        save_jsonl_file(price_row_dicts, run_dir / "price_rows.jsonl")
+        save_jsonl_file(room_feature_dicts, run_dir / "room_features.jsonl")
+        save_jsonl_file(property_feature_dicts, run_dir / "property_features.jsonl")
+        save_jsonl_file(failure_dicts, run_dir / "failures.jsonl")
+
+        logging.info("Room inventory records saved: %d", len(room_inventory_dicts))
+        logging.info("Price row records saved: %d", len(price_row_dicts))
+        logging.info("Room feature records saved: %d", len(room_feature_dicts))
+        logging.info("Property feature records saved: %d", len(property_feature_dicts))
+        logging.info("Failure records saved: %d", len(failure_dicts))
 
         validate_and_report_run(run_dir)
 

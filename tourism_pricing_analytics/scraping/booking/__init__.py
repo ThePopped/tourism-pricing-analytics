@@ -18,6 +18,8 @@ from tourism_pricing_analytics.scraping.booking.failures import (
     normalize_page_text,
 )
 from tourism_pricing_analytics.scraping.booking.io import (
+    append_jsonl_file,
+    append_property_failures,
     create_property_output_dir,
     create_run_dir,
     failure_records_to_dicts,
@@ -30,6 +32,14 @@ from tourism_pricing_analytics.scraping.booking.io import (
     save_property_room_inventory,
     save_text_file,
     setup_logging,
+)
+from tourism_pricing_analytics.scraping.booking.resume import (
+    TERMINAL_FAILURE_CATEGORIES,
+    expected_price_windows,
+    expected_property_dir,
+    is_property_complete,
+    is_terminal_failure_category,
+    pending_targets,
 )
 from tourism_pricing_analytics.scraping.booking.models import (
     BrowserConfig,
@@ -85,6 +95,9 @@ __all__ = [
     "ScrollConfig",
     "TimeoutConfig",
     "ViewportConfig",
+    "TERMINAL_FAILURE_CATEGORIES",
+    "append_jsonl_file",
+    "append_property_failures",
     "build_date_window",
     "build_dated_url",
     "build_property_url",
@@ -100,10 +113,14 @@ __all__ = [
     "extract_price_rows",
     "extract_room_inventory",
     "extract_select_options",
+    "expected_price_windows",
+    "expected_property_dir",
     "failure_records_to_dicts",
     "get_locator_attribute",
     "get_locator_text",
     "human_pause",
+    "is_property_complete",
+    "is_terminal_failure_category",
     "load_scraper_config",
     "main",
     "navigate_to_page",
@@ -111,6 +128,7 @@ __all__ = [
     "normalize_page_text",
     "normalize_price_text",
     "normalize_whitespace",
+    "pending_targets",
     "price_row_records_to_dicts",
     "room_inventory_records_to_dicts",
     "run",
