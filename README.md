@@ -68,7 +68,7 @@ Key files and directories:
 - `tests/`: standard-library `unittest` coverage.
 - `data/sample/raw_html/`: small saved HTML fixtures used by parser and failure-classification tests.
 - `docs/scraping/scraper_design.md`: scraper design notes, DOM findings, scrape strategy, and generated-output retention policy.
-- `docs/scraping/next_pass_refactor_plan.md`: current hardening plan and acceptance criteria.
+- `docs/scraping/booking_scraper_roadmap.md`: staged build/hardening/scale roadmap and acceptance criteria.
 - `saved_dom/runs/`: generated scrape runs and debug artifacts. This directory is intentionally ignored by Git.
 
 ## Booking Scraper Architecture
@@ -346,7 +346,7 @@ The next planned implementation step is to make these checks executable as struc
 Useful project docs:
 
 - `docs/scraping/scraper_design.md`: Booking.com DOM findings, scrape strategy, output retention policy, and risk notes.
-- `docs/scraping/next_pass_refactor_plan.md`: current hardening roadmap and acceptance criteria.
+- `docs/scraping/booking_scraper_roadmap.md`: staged build/hardening/scale roadmap and acceptance criteria.
 - `session_notes.md`: requested handoff/status snapshot. This file is replaced when updated, not appended as a changelog.
 - `AGENTS.md` and `CLAUDE.md`: local coding-agent instructions and development discipline.
 

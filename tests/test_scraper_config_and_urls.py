@@ -2,7 +2,7 @@ import unittest
 from datetime import date
 from urllib.parse import parse_qs, urlsplit
 
-from config import ROOT
+from config import CONFIG_DIR, ROOT
 from tourism_pricing_analytics.scraping.booking.config import load_scraper_config
 from tourism_pricing_analytics.scraping.booking.models import DefaultSearchConfig
 from tourism_pricing_analytics.scraping.booking.urls import (
@@ -31,6 +31,25 @@ class ScraperConfigAndUrlTests(unittest.TestCase):
         self.assertEqual(scraper_config.default_search.no_rooms, 1)
         self.assertEqual(scraper_config.lead_times, [1, 7, 14, 30, 60])
         self.assertEqual(scraper_config.stay_lengths, [4, 7, 14])
+
+    def test_full_chania_config_uses_scale_up_matrix_and_speed_settings(self) -> None:
+        scraper_config = load_scraper_config(
+            CONFIG_DIR / "booking_scraper_config_chania_full.json"
+        )
+
+        self.assertEqual(len(scraper_config.properties), 438)
+        self.assertEqual(scraper_config.lead_times, [7, 30, 60])
+        self.assertEqual(scraper_config.stay_lengths, [4, 7])
+        self.assertTrue(scraper_config.browser.headless)
+        self.assertEqual(scraper_config.browser.slow_mo_ms, 0)
+        self.assertEqual(scraper_config.seed, 10001)
+        self.assertEqual(scraper_config.output_root, ROOT / "saved_dom")
+
+        urls = [target.url for target in scraper_config.properties]
+        self.assertEqual(len(urls), len(set(urls)))
+        for url in urls:
+            self.assertNotIn("?", url)
+            self.assertTrue(url.startswith("https://www.booking.com/hotel/"))
 
     def test_build_date_window_uses_fixed_base_date_offsets(self) -> None:
         checkin, checkout = build_date_window(

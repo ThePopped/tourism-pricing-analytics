@@ -56,7 +56,7 @@ Prefer direct dated URLs over calendar interaction. Keep raw text fields, such a
 
 ## Testing Guidance
 
-Follow the staged testing plan in `docs/scraping/next_pass_refactor_plan.md`.
+Follow the staged testing plan in `docs/scraping/booking_scraper_roadmap.md`.
 
 - Unit tests first for pure logic: config, date windows, URLs, price parsing, per-night calculation, serialization.
 - Fixture parser tests next using saved undated and dated HTML snapshots.

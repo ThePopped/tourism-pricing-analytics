@@ -1,4 +1,12 @@
-# Next Pass Refactor Plan
+# Booking Scraper Roadmap
+
+This is the staged build → harden → scale roadmap for the Booking.com ingestion
+pipeline. The foundational build/hardening pass described first (Phases 1–8 and
+its acceptance criteria) is **complete**, as is the feature-extraction layer and
+the broadening of the configured set to 15 Chania properties. The current active
+pass is the **Scale-Up Pass** documented at the end of this file. The acceptance
+and data-quality checklists below remain the enduring validation gate for every
+live run, including the scale-up.
 
 ## Objective
 
@@ -290,3 +298,119 @@ Avoid doing these in the same refactor unless they become necessary:
 - Treat room inventory and rate rows as separate entities
 - Preserve Booking identifiers such as `room_id` and `block_id`
 - Store raw rate-condition text before designing a normalized taxonomy
+
+---
+
+# Scale-Up Pass: 438 Chania Properties
+
+## Status
+
+Planned and approved; **not yet implemented**. The foundational build,
+feature-extraction layer, and the 15-property broadening (live-validated against
+run `20260622_105842_988147`) are done. This pass scales the configured set to
+the full Chania candidate list while keeping the run reliable.
+
+## Objective
+
+Scrape the full Chania candidate set (438 properties from
+`data/sample/listings_chania_candidates.csv`) reliably and in a reasonable
+wall-clock time, producing the same structured streams (room inventory, dated
+price rows, room/property feature streams) and a clean modelling table.
+
+## Decisions (locked)
+
+- **Data scope — reduced price matrix.** `lead_times: [7, 30, 60]` ×
+  `stay_lengths: [4, 7]` = 6 dated windows + 1 undated inventory page = **7
+  navigations/property** (down from 16). Drops last-minute (1-day, usually
+  sold out) and 14-day leads, and the 14-night stay.
+- **Concurrency — process sharding, 3 workers.** Split the property list across
+  3 OS worker processes, each running the existing **sync** runner over its
+  slice with its own browser, writing into one shared run directory. Chosen over
+  an async rewrite because the parsers and feature extractors are coupled to the
+  sync Playwright API (`page.locator(...)`), so sharding gets the parallelism
+  with near-zero change to the tested parsing layer, plus crash isolation.
+- **Robustness — resumable + retry/backoff.** Skip already-completed properties
+  on resume; retry transient/block failures with exponential backoff; never
+  retry legitimate `empty_availability` or structural `selector_drift`.
+
+## Rationale: why these levers
+
+Measured baseline (run `20260622_105842_988147`): 15 properties → ~23 min, 240
+navigations → ~5.8 s/navigation, ~93 s/property. The work is I/O-bound (network
++ fixed sleeps), not CPU-bound, so the dominant levers are (1) fewer navigations
+per property, (2) trimming fixed sleeps + headless, and (3) concurrency. Async
+helps only because it enables concurrency; process sharding delivers the same
+speedup without rewriting sync-coupled parsers.
+
+**Projected wall-clock:** ~2.8 h sequential after speed tuning → **~50–60 min at
+3 workers**.
+
+## Phases
+
+Each phase ends with a full relevant test sweep and a commit, per the testing
+policy above.
+
+### Phase 0 — Plan doc + targets
+- Rename this doc to `booking_scraper_roadmap.md` and append this Scale-Up Pass
+  section (done).
+- Generate `config/booking_scraper_config_chania_full.json` from
+  `listings_chania_candidates.csv`: normalize/dedupe the 438 URLs, apply the
+  reduced matrix and speed settings. The validated 15-property
+  `booking_scraper_config.json` baseline is left untouched.
+
+### Phase 1 — Speed & politeness (config + minimal `browser.py`)
+- `headless: true`, `slow_mo_ms: 0`, and convert the fixed post-`goto`
+  `human_pause(1.0, 2.0)` into a smaller config-driven jittered pause (retain
+  some jitter for politeness). Target ~5.8 → ~3.3 s/navigation.
+- New config field → config-loading test.
+
+### Phase 2 — Resumability
+- Pure `pending_targets(run_dir, targets)` helper that skips properties whose
+  per-property output directory is already complete, so a blocked/crashed run
+  resumes rather than restarts. Unit-tested on a temp directory.
+
+### Phase 3 — Retry with backoff
+- Pure `should_retry(category, attempt)` plus a retry wrapper so `blocked_page`,
+  `temporary_booking_error`, and `navigation_error` get K retries with
+  exponential backoff + jitter before being recorded as failures.
+  `empty_availability` and `selector_drift` are never retried. Unit-tested.
+
+### Phase 4 — Process-sharding driver
+- `scripts/run_full_scrape.py`: load targets → apply resume filter → split into
+  N shards → spawn N worker processes (each runs the existing sync runner over
+  its slice with its own browser, into one shared run dir) → merge per-property
+  JSONL into the top-level aggregated streams → validate → build modelling table.
+- Light refactor of `run()` / `main()` to accept a target slice + shared run dir
+  and skip final aggregation when running as a worker (the driver owns
+  aggregation and validation). Parsers and feature extractors are reused
+  unchanged. Stdlib only (`multiprocessing`, backoff) — no new `pyproject.toml`
+  dependencies. Shard-split and merge helpers are pure and unit-tested.
+
+### Phase 5 — Staged live validation, then full run
+- Pilot ~50 properties first (resume makes the pilot count toward the full run)
+  to measure throughput, block rate, and feature coverage, and tune worker count
+  + pause. Then the full 438. Build the modelling table end to end and commit
+  only after the gate below passes.
+
+## Acceptance gate (enforced)
+
+A scale-up run is **not** considered done until it satisfies, in addition to
+`validation_report.json` `is_valid: true`:
+
+1. The **Live Validation Acceptance** checklist (see "Live Validation
+   Acceptance" above): timestamped run dir; `scrape_debug.log`,
+   `room_inventory.jsonl`, `price_rows.jsonl` present; per-property output dirs;
+   non-empty `room_id`/`room_name` where an undated table exists; sane numeric
+   prices; `price_per_night = total / stay_length`; empty windows logged without
+   failing the run; clean browser close with a completion log line;
+   `failures.jsonl` present with a machine-readable category per failure; failure
+   snapshot paths exist when expected.
+2. The **Data Quality Checks Before Downstream Analytics** (see that section
+   above): no negative or spurious near-zero prices; no missing `checkin` /
+   `checkout` / `stay_length_days` / `captured_at`; no duplicate
+   `(property_url, room_id)` within a run; raw text fields preserved alongside
+   normalized numbers.
+3. **Null-`room_id` review.** The count of price rows with a null `room_id`
+   after Layer 2 name→id reconciliation is reported and reviewed (the known
+   "bbasic" reworded-label limitation; 3/421 in the 15-property run), rather
+   than silently carried into modelling.
