@@ -7,6 +7,7 @@ from tourism_pricing_analytics.scraping.booking.models import (
     DefaultSearchConfig,
     PauseConfig,
     PropertyTarget,
+    RetryConfig,
     ScraperConfig,
     ScrollConfig,
     TimeoutConfig,
@@ -31,6 +32,7 @@ def load_scraper_config(config_path: Path = DEFAULT_CONFIG_PATH) -> ScraperConfi
     timeouts = TimeoutConfig(**raw_config["timeouts_ms"])
     scroll = ScrollConfig(**raw_config["scroll"])
     pauses = PauseConfig(**raw_config.get("pauses", {}))
+    retry = RetryConfig(**raw_config.get("retry", {}))
     properties = [PropertyTarget(**item) for item in raw_config["properties"]]
 
     if not properties:
@@ -52,4 +54,5 @@ def load_scraper_config(config_path: Path = DEFAULT_CONFIG_PATH) -> ScraperConfi
         common_opened_selectors=list(raw_config["common_opened_selectors"]),
         properties=properties,
         pauses=pauses,
+        retry=retry,
     )

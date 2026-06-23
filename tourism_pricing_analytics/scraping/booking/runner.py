@@ -49,6 +49,10 @@ from tourism_pricing_analytics.scraping.booking.parsing import (
     extract_room_inventory,
 )
 from tourism_pricing_analytics.scraping.booking.resume import pending_targets
+from tourism_pricing_analytics.scraping.booking.retry import (
+    backoff_delay_ms,
+    should_retry,
+)
 from tourism_pricing_analytics.scraping.booking.urls import (
     build_date_window,
     build_dated_url,
@@ -172,6 +176,21 @@ def build_failure_record(
     )
 
 
+def wait_before_retry(page: Page | None, scraper_config: ScraperConfig, attempt: int) -> int:
+    delay_ms = backoff_delay_ms(
+        attempt,
+        base_backoff_ms=scraper_config.retry.base_backoff_ms,
+        max_backoff_ms=scraper_config.retry.max_backoff_ms,
+        jitter_ms=scraper_config.retry.jitter_ms,
+    )
+    if delay_ms <= 0:
+        return delay_ms
+
+    if page is not None and not page.is_closed() and hasattr(page, "wait_for_timeout"):
+        page.wait_for_timeout(delay_ms)
+    return delay_ms
+
+
 def run_room_inventory_loop(
     context: BrowserContext,
     page: Page,
@@ -191,68 +210,84 @@ def run_room_inventory_loop(
         property_url = build_room_inventory_url(target.url)
         output_dir = property_output_dirs[target.url]
         property_failure_records: list[ScrapeFailureRecord] = []
-        page = ensure_page(context, page)
-        status_code: int | None = None
-        navigation_completed = False
+        property_records: list[RoomInventoryRecord] = []
+        captured_at = datetime.now().isoformat(timespec="seconds")
 
-        try:
-            status_code = navigate_to_page(page, property_url, scraper_config, scroll_page=True)
-            navigation_completed = True
-            captured_at = datetime.now().isoformat(timespec="seconds")
-            property_records = extract_room_inventory(page, target, property_url, captured_at)
-        except Exception as exc:
-            captured_at = datetime.now().isoformat(timespec="seconds")
-            logging.exception("Room inventory extraction failed for %s", target.name)
-            classification = classify_current_page_failure(
-                page,
-                requested_url=property_url,
-                expected_selector=ROOM_INVENTORY_SELECTOR,
-                fallback_selectors=ROOM_INVENTORY_FALLBACK_SELECTORS,
-                status_code=status_code,
-                default_category="extraction_error" if navigation_completed else "navigation_error",
-                default_reason="Room inventory navigation or extraction raised an exception.",
-            )
-            filename = f"room_inventory_{classification.category}.html"
-            snapshot_filename = save_failure_snapshot(page, output_dir, filename)
-            failure_record = build_failure_record(
-                target_name=target.name,
-                target_url=target.url,
-                scrape_stage="room_inventory",
-                classification=classification,
-                requested_url=property_url,
-                final_url=get_page_url(page),
-                captured_at=captured_at,
-                status_code=status_code,
-                snapshot_filename=snapshot_filename,
-                exception=exc,
-            )
-            failure_records.append(failure_record)
-            property_failure_records.append(failure_record)
-            append_property_failures(property_failure_records, output_dir)
-            page = None
-            continue
+        for attempt in range(1, scraper_config.retry.max_attempts + 1):
+            page = ensure_page(context, page)
+            status_code: int | None = None
+            navigation_completed = False
 
-        records.extend(property_records)
+            try:
+                status_code = navigate_to_page(
+                    page,
+                    property_url,
+                    scraper_config,
+                    scroll_page=True,
+                )
+                navigation_completed = True
+                captured_at = datetime.now().isoformat(timespec="seconds")
+                property_records = extract_room_inventory(
+                    page,
+                    target,
+                    property_url,
+                    captured_at,
+                )
+            except Exception as exc:
+                captured_at = datetime.now().isoformat(timespec="seconds")
+                classification = classify_current_page_failure(
+                    page,
+                    requested_url=property_url,
+                    expected_selector=ROOM_INVENTORY_SELECTOR,
+                    fallback_selectors=ROOM_INVENTORY_FALLBACK_SELECTORS,
+                    status_code=status_code,
+                    default_category="extraction_error"
+                    if navigation_completed
+                    else "navigation_error",
+                    default_reason="Room inventory navigation or extraction raised an exception.",
+                )
+                if should_retry(
+                    classification.category,
+                    attempt,
+                    scraper_config.retry.max_attempts,
+                ):
+                    delay_ms = wait_before_retry(page, scraper_config, attempt)
+                    logging.warning(
+                        "Retrying room inventory for %s after %s on attempt %d/%d; backoff_ms=%d",
+                        target.name,
+                        classification.category,
+                        attempt,
+                        scraper_config.retry.max_attempts,
+                        delay_ms,
+                    )
+                    page = None
+                    continue
 
-        # The undated property page is already scrolled here, so its subscores /
-        # surroundings sections are loaded. The whole-property facilities section
-        # (with the nested languages group) is lazy-loaded lower down, so bring it
-        # into view explicitly before collecting the date-stable property features.
-        # Isolated so an extraction error never disrupts the inventory scrape.
-        try:
-            ensure_property_facilities_loaded(page)
-            property_feature = extract_property_features(
-                page,
-                property_name=target.name,
-                property_url=target.url,
-                captured_at=captured_at,
-            )
-            property_feature_records.append(property_feature)
-            save_property_features([property_feature], output_dir)
-        except Exception:
-            logging.exception("Property feature extraction failed for %s", target.name)
+                logging.exception("Room inventory extraction failed for %s", target.name)
+                filename = f"room_inventory_{classification.category}.html"
+                snapshot_filename = save_failure_snapshot(page, output_dir, filename)
+                failure_record = build_failure_record(
+                    target_name=target.name,
+                    target_url=target.url,
+                    scrape_stage="room_inventory",
+                    classification=classification,
+                    requested_url=property_url,
+                    final_url=get_page_url(page),
+                    captured_at=captured_at,
+                    status_code=status_code,
+                    snapshot_filename=snapshot_filename,
+                    exception=exc,
+                )
+                failure_records.append(failure_record)
+                property_failure_records.append(failure_record)
+                append_property_failures(property_failure_records, output_dir)
+                page = None
+                break
 
-        if not property_records:
+            if property_records:
+                records.extend(property_records)
+                break
+
             classification = classify_current_page_failure(
                 page,
                 requested_url=property_url,
@@ -262,6 +297,23 @@ def run_room_inventory_loop(
                 default_category="selector_drift",
                 default_reason="No room inventory records were extracted.",
             )
+            if should_retry(
+                classification.category,
+                attempt,
+                scraper_config.retry.max_attempts,
+            ):
+                delay_ms = wait_before_retry(page, scraper_config, attempt)
+                logging.warning(
+                    "Retrying room inventory for %s after empty %s result on attempt %d/%d; backoff_ms=%d",
+                    target.name,
+                    classification.category,
+                    attempt,
+                    scraper_config.retry.max_attempts,
+                    delay_ms,
+                )
+                page = None
+                continue
+
             logging.warning(
                 "No room inventory extracted for %s; category=%s",
                 target.name,
@@ -283,7 +335,28 @@ def run_room_inventory_loop(
             failure_records.append(failure_record)
             property_failure_records.append(failure_record)
             append_property_failures(property_failure_records, output_dir)
+            break
+
+        if not property_records:
             continue
+
+        # The undated property page is already scrolled here, so its subscores /
+        # surroundings sections are loaded. The whole-property facilities section
+        # (with the nested languages group) is lazy-loaded lower down, so bring it
+        # into view explicitly before collecting the date-stable property features.
+        # Isolated so an extraction error never disrupts the inventory scrape.
+        try:
+            ensure_property_facilities_loaded(page)
+            property_feature = extract_property_features(
+                page,
+                property_name=target.name,
+                property_url=target.url,
+                captured_at=captured_at,
+            )
+            property_feature_records.append(property_feature)
+            save_property_features([property_feature], output_dir)
+        except Exception:
+            logging.exception("Property feature extraction failed for %s", target.name)
 
         save_property_room_inventory(property_records, output_dir)
         logging.info(
@@ -323,88 +396,101 @@ def run_price_loop(
                     checkout=checkout,
                     default_search=scraper_config.default_search,
                 )
-                page = ensure_page(context, page)
-                status_code: int | None = None
-                navigation_completed = False
+                price_rows: list[PriceRowRecord] = []
+                captured_at = datetime.now().isoformat(timespec="seconds")
 
-                try:
-                    status_code = navigate_to_page(
-                        page,
-                        dated_url,
-                        scraper_config,
-                        scroll_page=False,
-                    )
-                    navigation_completed = True
-                    captured_at = datetime.now().isoformat(timespec="seconds")
-                    price_rows = extract_price_rows(
-                        page,
-                        target=target,
-                        checkin=checkin,
-                        checkout=checkout,
-                        lead_time_days=lead_time_days,
-                        stay_length_days=stay_length_days,
-                        captured_at=captured_at,
-                    )
-                except Exception as exc:
-                    logging.exception(
-                        "Price extraction failed for %s, lead_time=%d, stay_length=%d",
-                        target.name,
-                        lead_time_days,
-                        stay_length_days,
-                    )
-                    captured_at = datetime.now().isoformat(timespec="seconds")
-                    classification = classify_current_page_failure(
-                        page,
-                        requested_url=dated_url,
-                        expected_selector=PRICE_ROW_SELECTOR,
-                        fallback_selectors=PRICE_ROW_FALLBACK_SELECTORS,
-                        status_code=status_code,
-                        default_category="extraction_error" if navigation_completed else "navigation_error",
-                        default_reason="Price navigation or extraction raised an exception.",
-                    )
-                    filename = (
-                        f"price_rows_{classification.category}_lead_{lead_time_days:03d}"
-                        f"_stay_{stay_length_days:03d}.html"
-                    )
-                    snapshot_filename = save_failure_snapshot(page, output_dir, filename)
-                    failure_record = build_failure_record(
-                        target_name=target.name,
-                        target_url=target.url,
-                        scrape_stage="price_rows",
-                        classification=classification,
-                        requested_url=dated_url,
-                        final_url=get_page_url(page),
-                        checkin=checkin.isoformat(),
-                        checkout=checkout.isoformat(),
-                        lead_time_days=lead_time_days,
-                        stay_length_days=stay_length_days,
-                        captured_at=captured_at,
-                        status_code=status_code,
-                        snapshot_filename=snapshot_filename,
-                        exception=exc,
-                    )
-                    failure_records.append(failure_record)
-                    property_failure_records.append(failure_record)
-                    page = None
-                    continue
+                for attempt in range(1, scraper_config.retry.max_attempts + 1):
+                    page = ensure_page(context, page)
+                    status_code: int | None = None
+                    navigation_completed = False
 
-                records.extend(price_rows)
-                property_records.extend(price_rows)
+                    try:
+                        status_code = navigate_to_page(
+                            page,
+                            dated_url,
+                            scraper_config,
+                            scroll_page=False,
+                        )
+                        navigation_completed = True
+                        captured_at = datetime.now().isoformat(timespec="seconds")
+                        price_rows = extract_price_rows(
+                            page,
+                            target=target,
+                            checkin=checkin,
+                            checkout=checkout,
+                            lead_time_days=lead_time_days,
+                            stay_length_days=stay_length_days,
+                            captured_at=captured_at,
+                        )
+                    except Exception as exc:
+                        captured_at = datetime.now().isoformat(timespec="seconds")
+                        classification = classify_current_page_failure(
+                            page,
+                            requested_url=dated_url,
+                            expected_selector=PRICE_ROW_SELECTOR,
+                            fallback_selectors=PRICE_ROW_FALLBACK_SELECTORS,
+                            status_code=status_code,
+                            default_category="extraction_error"
+                            if navigation_completed
+                            else "navigation_error",
+                            default_reason="Price navigation or extraction raised an exception.",
+                        )
+                        if should_retry(
+                            classification.category,
+                            attempt,
+                            scraper_config.retry.max_attempts,
+                        ):
+                            delay_ms = wait_before_retry(page, scraper_config, attempt)
+                            logging.warning(
+                                "Retrying price rows for %s, lead_time=%d, stay_length=%d after %s on attempt %d/%d; backoff_ms=%d",
+                                target.name,
+                                lead_time_days,
+                                stay_length_days,
+                                classification.category,
+                                attempt,
+                                scraper_config.retry.max_attempts,
+                                delay_ms,
+                            )
+                            page = None
+                            continue
 
-                # Collect date-stable room features from the loaded page. Isolated
-                # so a feature-extraction error never disrupts the price scrape.
-                try:
-                    for feature in extract_room_features(
-                        page,
-                        property_name=target.name,
-                        property_url=target.url,
-                        captured_at=captured_at,
-                    ):
-                        room_features_by_id.setdefault(feature.room_id, feature)
-                except Exception:
-                    logging.exception("Room feature extraction failed for %s", target.name)
+                        logging.exception(
+                            "Price extraction failed for %s, lead_time=%d, stay_length=%d",
+                            target.name,
+                            lead_time_days,
+                            stay_length_days,
+                        )
+                        filename = (
+                            f"price_rows_{classification.category}_lead_{lead_time_days:03d}"
+                            f"_stay_{stay_length_days:03d}.html"
+                        )
+                        snapshot_filename = save_failure_snapshot(page, output_dir, filename)
+                        failure_record = build_failure_record(
+                            target_name=target.name,
+                            target_url=target.url,
+                            scrape_stage="price_rows",
+                            classification=classification,
+                            requested_url=dated_url,
+                            final_url=get_page_url(page),
+                            checkin=checkin.isoformat(),
+                            checkout=checkout.isoformat(),
+                            lead_time_days=lead_time_days,
+                            stay_length_days=stay_length_days,
+                            captured_at=captured_at,
+                            status_code=status_code,
+                            snapshot_filename=snapshot_filename,
+                            exception=exc,
+                        )
+                        failure_records.append(failure_record)
+                        property_failure_records.append(failure_record)
+                        page = None
+                        break
 
-                if not price_rows:
+                    if price_rows:
+                        records.extend(price_rows)
+                        property_records.extend(price_rows)
+                        break
+
                     classification = classify_current_page_failure(
                         page,
                         requested_url=dated_url,
@@ -414,6 +500,25 @@ def run_price_loop(
                         default_category="selector_drift",
                         default_reason="No price rows were extracted.",
                     )
+                    if should_retry(
+                        classification.category,
+                        attempt,
+                        scraper_config.retry.max_attempts,
+                    ):
+                        delay_ms = wait_before_retry(page, scraper_config, attempt)
+                        logging.warning(
+                            "Retrying price rows for %s, lead_time=%d, stay_length=%d after empty %s result on attempt %d/%d; backoff_ms=%d",
+                            target.name,
+                            lead_time_days,
+                            stay_length_days,
+                            classification.category,
+                            attempt,
+                            scraper_config.retry.max_attempts,
+                            delay_ms,
+                        )
+                        page = None
+                        continue
+
                     logging.warning(
                         "No price rows extracted for %s, lead_time=%d, stay_length=%d; category=%s",
                         target.name,
@@ -443,6 +548,23 @@ def run_price_loop(
                     )
                     failure_records.append(failure_record)
                     property_failure_records.append(failure_record)
+                    break
+
+                if not price_rows:
+                    continue
+
+                # Collect date-stable room features from the loaded page. Isolated
+                # so a feature-extraction error never disrupts the price scrape.
+                try:
+                    for feature in extract_room_features(
+                        page,
+                        property_name=target.name,
+                        property_url=target.url,
+                        captured_at=captured_at,
+                    ):
+                        room_features_by_id.setdefault(feature.room_id, feature)
+                except Exception:
+                    logging.exception("Room feature extraction failed for %s", target.name)
 
         if property_records:
             save_property_price_rows(property_records, output_dir)

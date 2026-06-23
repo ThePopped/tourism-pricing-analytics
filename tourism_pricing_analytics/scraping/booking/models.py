@@ -65,6 +65,20 @@ class PauseConfig:
 
 
 @dataclass(frozen=True)
+class RetryConfig:
+    """Retry policy for transient page failures.
+
+    ``max_attempts`` counts the initial try plus retries. A value of 1 disables
+    retries while keeping the retry wrapper behavior deterministic for tests.
+    """
+
+    max_attempts: int = 3
+    base_backoff_ms: int = 1000
+    max_backoff_ms: int = 10000
+    jitter_ms: int = 500
+
+
+@dataclass(frozen=True)
 class PropertyTarget:
     name: str
     url: str
@@ -83,6 +97,7 @@ class ScraperConfig:
     common_opened_selectors: list[str]
     properties: list[PropertyTarget]
     pauses: PauseConfig = field(default_factory=PauseConfig)
+    retry: RetryConfig = field(default_factory=RetryConfig)
 
 
 @dataclass(frozen=True)

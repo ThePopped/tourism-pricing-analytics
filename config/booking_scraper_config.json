@@ -25,6 +25,12 @@
     "post_nav_min_ms": 300,
     "post_nav_max_ms": 800
   },
+  "retry": {
+    "max_attempts": 3,
+    "base_backoff_ms": 1000,
+    "max_backoff_ms": 10000,
+    "jitter_ms": 500
+  },
   "scroll": {
     "rounds": 2,
     "min_delta": 120,

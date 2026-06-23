@@ -41,12 +41,18 @@ from tourism_pricing_analytics.scraping.booking.resume import (
     is_terminal_failure_category,
     pending_targets,
 )
+from tourism_pricing_analytics.scraping.booking.retry import (
+    RETRYABLE_FAILURE_CATEGORIES,
+    backoff_delay_ms,
+    should_retry,
+)
 from tourism_pricing_analytics.scraping.booking.models import (
     BrowserConfig,
     DefaultSearchConfig,
     FailureCategory,
     PriceRowRecord,
     PropertyTarget,
+    RetryConfig,
     RoomInventoryRecord,
     ScrapeFailureRecord,
     ScrapeStage,
@@ -88,6 +94,8 @@ __all__ = [
     "PageFailureClassification",
     "PriceRowRecord",
     "PropertyTarget",
+    "RETRYABLE_FAILURE_CATEGORIES",
+    "RetryConfig",
     "RoomInventoryRecord",
     "ScrapeFailureRecord",
     "ScrapeStage",
@@ -98,6 +106,7 @@ __all__ = [
     "TERMINAL_FAILURE_CATEGORIES",
     "append_jsonl_file",
     "append_property_failures",
+    "backoff_delay_ms",
     "build_date_window",
     "build_dated_url",
     "build_property_url",
@@ -141,5 +150,6 @@ __all__ = [
     "save_property_room_inventory",
     "save_text_file",
     "setup_logging",
+    "should_retry",
     "slugify",
 ]

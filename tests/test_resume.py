@@ -183,18 +183,25 @@ class ResumeHelpersTests(unittest.TestCase):
                 is_property_complete(Path(tmp), 1, self.target, [7], [4, 7])
             )
 
-    def test_transient_failure_window_is_pending(self) -> None:
+    def test_transient_failure_windows_are_pending(self) -> None:
         with TemporaryDirectory() as tmp:
             property_dir = expected_property_dir(Path(tmp), 1, self.target)
             _write_jsonl(property_dir / "room_inventory.jsonl", [_inventory_record(self.target)])
-            _write_jsonl(
-                property_dir / "failures.jsonl",
-                [_failure_record(self.target, category="navigation_error")],
-            )
+            for category in [
+                "blocked_challenge",
+                "partial_load",
+                "temporary_booking_error",
+                "navigation_error",
+            ]:
+                with self.subTest(category=category):
+                    _write_jsonl(
+                        property_dir / "failures.jsonl",
+                        [_failure_record(self.target, category=category)],
+                    )
 
-            self.assertFalse(
-                is_property_complete(Path(tmp), 1, self.target, [7], [4])
-            )
+                    self.assertFalse(
+                        is_property_complete(Path(tmp), 1, self.target, [7], [4])
+                    )
 
     def test_pending_targets_returns_only_incomplete_targets(self) -> None:
         with TemporaryDirectory() as tmp:
