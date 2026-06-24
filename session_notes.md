@@ -6,14 +6,19 @@ The Booking.com scraper data layer is complete, the configured property set has
 been broadened to **15 Chania properties**, and the Scale-Up Pass toward the
 full **438-property Chania candidate set** is underway.
 
-Scale-Up Phases 0-2 are complete:
+Scale-Up Phases 0-4 are complete:
 
 - Phase 0: full 438-property Chania config generated.
 - Phase 1: post-navigation pause made config-driven and shortened for the
   scale-up run.
 - Phase 2: artifact-based resumability added.
+- Phase 3: retry policy with bounded exponential backoff added for transient
+  scrape failures.
+- Phase 4: process-sharding driver (`scripts/run_full_scrape.py`) with target
+  slicing, shared run dirs, per-property resume, and deterministic aggregation.
 
-The next implementation step is **Phase 3 - Retry with backoff**.
+The next implementation step is **Phase 5 - Staged live validation, then full
+run**.
 
 ## Current Status
 
@@ -24,7 +29,11 @@ room inventory, dated price rows, a Tier B room-feature stream
 (`room_features.jsonl`), and a Tier C property-feature stream
 (`property_features.jsonl`). A separate browser-free Layer 2 under
 `tourism_pricing_analytics/features/` derives the modelling table from the
-persisted JSONL.
+persisted JSONL. The full scale-up run is driven by
+`scripts/run_full_scrape.py`, which shards configured targets across worker
+processes (each its own sync Playwright browser) into a shared run dir, skips
+already-complete properties via the resume predicate, then rebuilds aggregate
+JSONL streams and runs validation + the modelling-table build as the gate.
 
 Latest rigorous live validation remains run `20260622_105842_988147`
 (15 properties):
@@ -35,26 +44,22 @@ Latest rigorous live validation remains run `20260622_105842_988147`
 - All 126 failures are `empty_availability`; no selector drift was observed on
   the broadened layouts.
 - Lucia and Royal Sun returned room inventory but 0 price rows because every
-  dated window was `empty_availability`; this is now explicitly supported by
-  the resumability completion predicate.
+  dated window was `empty_availability`; this is explicitly supported by the
+  resumability completion predicate.
 - Modelling table builds end to end: 421 rows, 53 columns, 13 properties with
   availability; `property_facilities`/`languages_spoken` 421/421; `room_id`
   418/421, with 3 nulls from known bbasic reworded-label cases.
 
-Current code/test state after Phase 2:
+Current code/test state after Phase 4:
 
-- Commit `dd57396`: `Add scraper resumability helpers`.
-- `.\.venv\Scripts\python.exe -m unittest discover -s tests`: 164 tests OK.
-- Targeted `py_compile` check OK for the scraper entrypoint, root config, and
-  Phase 2 touched modules.
-- No live scrape was run for Phase 2; the roadmap deliberately stages live
-  validation at Phase 5.
-
-Working-tree items to keep separate from scraper progress:
-
-- `notebooks/exploring_listings.ipynb`: local notebook metadata/noise.
-- `.claude/`: local state.
-- `session_notes.md`: this file.
+- Commit `43d5f68`: `Anchor scrape resume date windows` (latest), on top of
+  `8a70e05`: `Add sharded full scrape driver`.
+- `.\.venv\Scripts\python.exe -m unittest discover -s tests`: 184 tests OK.
+- Targeted `py_compile` check OK for `scripts/run_full_scrape.py`,
+  `sharding.py`, `runner.py`, the scraper entrypoint, and root config.
+- `git diff --check`: only line-ending warnings, no whitespace errors.
+- No new live scrape has been run since the 15-property validation; the roadmap
+  deliberately stages live validation at Phase 5.
 
 ## Completed Project Milestones
 
@@ -88,6 +93,23 @@ Working-tree items to keep separate from scraper progress:
   persists per-property failures incrementally and rebuilds aggregate top-level
   JSONL streams from per-property artifacts so resumed/skipped properties are
   preserved.
+- **Scale-Up Phase 3 - retry with backoff** (commit `7c9ee94`): added
+  `RetryConfig`, configurable retry sections in both scraper configs, pure
+  retry/backoff helpers, and runner retry loops for inventory and price
+  windows. Retryable categories are `blocked_challenge`, `partial_load`,
+  `temporary_booking_error`, and `navigation_error`; terminal categories such
+  as `empty_availability`, `selector_drift`, and `redirect` are not retried.
+- **Scale-Up Phase 4 - process-sharding driver** (commits `8a70e05`,
+  `43d5f68`): added `scripts/run_full_scrape.py` and
+  `tourism_pricing_analytics/scraping/booking/sharding.py` with `IndexedTarget`,
+  stable config-index attachment, `pending_indexed_targets`,
+  deterministic contiguous `split_indexed_targets`, and
+  `aggregate_run_artifacts`. The runner grew `target_slice`, `all_targets`,
+  `finalize_run`, `worker_id`, and `search_base_date` hooks so each worker
+  scrapes its slice into a shared run dir without finalizing, then the driver
+  aggregates, validates, and builds the modelling table once all workers join.
+  Resume date windows are anchored to a persisted run base date so resumed runs
+  recompute the same windows. Added `tests/test_sharded_scrape_driver.py`.
 
 ## Scale-Up Pass Status
 
@@ -98,15 +120,11 @@ Completed:
 - **Phase 0 - Plan doc + targets**: done and committed.
 - **Phase 1 - Speed & politeness**: done and committed.
 - **Phase 2 - Resumability**: done and committed.
+- **Phase 3 - Retry with backoff**: done and committed.
+- **Phase 4 - Process-sharding driver**: done and committed.
 
 Pending:
 
-- **Phase 3 - Retry with backoff**: add retry policy for transient categories
-  such as `blocked_challenge`, `temporary_booking_error`, and
-  `navigation_error`; never retry `empty_availability` or `selector_drift`.
-- **Phase 4 - Process-sharding driver**: add `scripts/run_full_scrape.py` and
-  the supporting runner hooks for target slices, shared run dirs, aggregation,
-  validation, and modelling-table build.
 - **Phase 5 - Staged live validation, then full run**: pilot about 50
   properties, tune worker count and pause if needed, then run the full
   438-property scrape and enforce the acceptance/data-quality gate.
@@ -129,25 +147,32 @@ measurement.
 
 ## Current Package Structure
 
-- `models.py`: config, output dataclasses, `PauseConfig`,
+- `models.py`: config, output dataclasses, `PauseConfig`, `RetryConfig`,
   `RoomFeatureRecord` / `PropertyFeatureRecord`, failure categories and
   records.
-- `config.py`: config loading, including optional `pauses`.
+- `config.py`: config loading, including optional `pauses` and `retry`.
 - `urls.py`: property/dated/inventory URL, date window, and slug helpers.
 - `parsing.py`: price normalization, per-night calculation, room inventory
   parser, price row parser, `room_id_from_block_id` recovery.
 - `failures.py`: failure classification.
+- `retry.py`: retryable failure categories, retry decision helper, and bounded
+  exponential backoff with jitter.
 - `io.py`: run dirs, logging, JSONL serialization and appending for inventory,
   price, failure, and feature streams; validation-report persistence; DOM
-  snapshot writing.
+  snapshot writing; persisted run search base date.
 - `resume.py`: browser-free expected property directory, expected window,
   per-property completion, and pending-target helpers.
+- `sharding.py`: `IndexedTarget`, stable index attachment, pending/selected
+  target filtering, deterministic shard splitting, and per-property artifact
+  aggregation.
 - `browser.py`: navigation, status capture, cookie dismissal, recovery, scroll,
   config-driven post-navigation pause, and
   `ensure_property_facilities_loaded`.
-- `runner.py`: inventory loop, price loop, feature collection, incremental
-  per-property failure persistence, resumability filtering, aggregate stream
-  rebuilding, post-run validation, orchestration.
+- `runner.py`: inventory loop, price loop, retry handling, feature collection,
+  incremental per-property failure persistence, resumability filtering,
+  aggregate stream rebuilding, sharding hooks (`target_slice`, `all_targets`,
+  `finalize_run`, `worker_id`, `search_base_date`), post-run validation,
+  orchestration.
 - `validation.py`: run-output validation helpers and `RunValidationReport`.
 - `listings.py`: listings-page parser (`parse_listings`) for candidate
   targets.
@@ -155,6 +180,8 @@ measurement.
 - `tourism_pricing_analytics/features/`: Layer 2 browser-free feature building
   (`seasonality`, `meal_plan`, `cancellation`, `encoders`,
   `build_features`).
+- `scripts/run_full_scrape.py`: sharded orchestration entrypoint with
+  `--config`, `--workers`, `--run-dir` (resume), and `--limit` (pilot) flags.
 
 ## Known Issues
 
@@ -187,22 +214,20 @@ measurement.
 
 ## Next Recommended Step
 
-Implement **Scale-Up Phase 3 - Retry with backoff**:
+Execute **Scale-Up Phase 5 - Staged live validation, then full run**:
 
-- Add pure retry-policy helpers, likely in a new small module or near failure
-  classification: `should_retry(category, attempt, max_attempts)` and a
-  deterministic backoff/jitter helper that can be unit tested.
-- Retry transient categories: `blocked_challenge`, `temporary_booking_error`,
-  and `navigation_error`.
-- Do not retry terminal categories: `empty_availability`, `selector_drift`,
-  `redirect`, and successful price rows.
-- Integrate the retry wrapper around price-window navigation/extraction first;
-  room-inventory retry can use the same helper if the implementation stays
-  small and clear.
-- Preserve the Phase 2 completion semantics: only record final terminal failure
-  evidence after retries are exhausted, and keep transient unresolved windows
-  pending.
-- Add unit tests for retry decisions, max-attempt behavior, backoff bounds, and
-  the rule that transient failures remain resumable until terminal evidence is
-  written.
-- Run the full relevant test sweep before committing and moving to Phase 4.
+- Run a pilot of about 50 properties with
+  `python scripts/run_full_scrape.py --limit 50 --workers 3`. Resume makes the
+  pilot count toward the full run.
+- Measure pilot throughput, block rate, and feature coverage; tune `--workers`
+  and the config `pauses` section if blocking or wall-clock warrant it.
+- Run the full 438-property scrape (no `--limit`) against
+  `config/booking_scraper_config_chania_full.json`, resuming the same run dir
+  via `--run-dir` so completed pilot properties are skipped.
+- Enforce the roadmap acceptance gate before declaring done:
+  `validation_report.json` `is_valid: true`, the Live Validation Acceptance
+  checklist, the Data Quality checklist, an explicit null-`room_id` review, and
+  machine-readable per-property resumability evidence (terminal inventory state
+  plus a rows-or-terminal-failure state for every configured window).
+- Capture the final run's evidence under `saved_dom/runs/<timestamp>/` and only
+  then mark the Scale-Up Pass complete.
