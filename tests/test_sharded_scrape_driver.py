@@ -1,5 +1,6 @@
 import json
 import unittest
+from datetime import date
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -100,6 +101,27 @@ class ShardedScrapeDriverTests(unittest.TestCase):
             )
 
         self.assertEqual(pending, [])
+
+    def test_pending_indexed_targets_respects_search_base_date(self) -> None:
+        targets = indexed_targets([_target(1)])
+
+        with TemporaryDirectory() as tmp:
+            property_dir = Path(tmp) / "001_hotel_1"
+            _write_jsonl(property_dir / "room_inventory.jsonl", [_inventory_record(targets[0].target)])
+            _write_jsonl(
+                property_dir / "price_rows.jsonl",
+                [_price_record(targets[0].target, "shifted-window")],
+            )
+
+            pending = pending_indexed_targets(
+                Path(tmp),
+                targets,
+                lead_times=[7],
+                stay_lengths=[4],
+                search_base_date=date(2026, 6, 23),
+            )
+
+        self.assertEqual(pending, targets)
 
     def test_aggregate_run_artifacts_rebuilds_top_level_streams_in_config_order(self) -> None:
         targets = indexed_targets([_target(1), _target(2)])

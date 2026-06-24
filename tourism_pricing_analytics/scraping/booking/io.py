@@ -1,7 +1,7 @@
 import json
 import logging
 from dataclasses import asdict
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from playwright.sync_api import Page
@@ -21,11 +21,108 @@ from tourism_pricing_analytics.scraping.booking.validation import (
 )
 
 
+RUN_METADATA_FILENAME = "run_metadata.json"
+
+
 def create_run_dir(output_root: Path) -> Path:
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     run_dir = output_root / "runs" / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
     return run_dir
+
+
+def load_run_metadata(run_dir: Path) -> dict:
+    path = run_dir / RUN_METADATA_FILENAME
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        logging.warning("Ignoring malformed run metadata: %s", path)
+        return {}
+    if not isinstance(data, dict):
+        logging.warning("Ignoring non-object run metadata: %s", path)
+        return {}
+    return data
+
+
+def save_run_metadata(run_dir: Path, metadata: dict) -> Path:
+    path = run_dir / RUN_METADATA_FILENAME
+    content = json.dumps(metadata, ensure_ascii=True, indent=2, sort_keys=True)
+    return save_text_file(content + "\n", path)
+
+
+def _search_base_date_from_record(record: dict) -> date | None:
+    checkin = record.get("checkin")
+    lead_time_days = record.get("lead_time_days")
+    if not isinstance(checkin, str) or not isinstance(lead_time_days, int):
+        return None
+    try:
+        return date.fromisoformat(checkin) - timedelta(days=lead_time_days)
+    except ValueError:
+        return None
+
+
+def infer_run_search_base_date(run_dir: Path) -> date | None:
+    """Infer the run's date anchor from existing dated artifacts, if any."""
+
+    for filename in ("price_rows.jsonl", "failures.jsonl"):
+        aggregate_path = run_dir / filename
+        if not aggregate_path.exists():
+            continue
+        for line in aggregate_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(record, dict):
+                continue
+            search_base_date = _search_base_date_from_record(record)
+            if search_base_date is not None:
+                return search_base_date
+
+    for artifact_path in sorted(run_dir.glob("*/price_rows.jsonl")) + sorted(
+        run_dir.glob("*/failures.jsonl")
+    ):
+        for line in artifact_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(record, dict):
+                continue
+            search_base_date = _search_base_date_from_record(record)
+            if search_base_date is not None:
+                return search_base_date
+
+    return None
+
+
+def resolve_run_search_base_date(run_dir: Path, today: date | None = None) -> date:
+    """Return and persist the date anchor used to expand lead-time windows.
+
+    A resumed run must keep the same date windows even if it resumes after
+    midnight. For older runs without metadata, infer the anchor from existing
+    dated artifacts before falling back to the current date.
+    """
+
+    metadata = load_run_metadata(run_dir)
+    value = metadata.get("search_base_date")
+    if isinstance(value, str):
+        try:
+            return date.fromisoformat(value)
+        except ValueError:
+            logging.warning("Ignoring invalid search_base_date in run metadata: %s", value)
+
+    search_base_date = infer_run_search_base_date(run_dir) or (today or date.today())
+    metadata["search_base_date"] = search_base_date.isoformat()
+    metadata.setdefault("created_at", datetime.now().isoformat(timespec="seconds"))
+    save_run_metadata(run_dir, metadata)
+    return search_base_date
 
 
 def create_property_output_dir(run_dir: Path, property_index: int, target: PropertyTarget) -> Path:

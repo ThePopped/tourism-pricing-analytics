@@ -1,10 +1,12 @@
 import json
 import unittest
+from datetime import date
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from tourism_pricing_analytics.scraping.booking.models import PropertyTarget
 from tourism_pricing_analytics.scraping.booking.resume import (
+    expected_dated_price_windows,
     expected_price_windows,
     expected_property_dir,
     is_property_complete,
@@ -104,6 +106,12 @@ class ResumeHelpersTests(unittest.TestCase):
             {(7, 4), (7, 7), (30, 4), (30, 7)},
         )
 
+    def test_expected_dated_price_windows_anchors_to_base_date(self) -> None:
+        self.assertEqual(
+            expected_dated_price_windows([7], [4], date(2026, 6, 23)),
+            {(7, 4, "2026-06-30", "2026-07-04")},
+        )
+
     def test_missing_property_directory_is_not_complete(self) -> None:
         with TemporaryDirectory() as tmp:
             self.assertFalse(
@@ -142,6 +150,36 @@ class ResumeHelpersTests(unittest.TestCase):
 
             self.assertTrue(
                 is_property_complete(Path(tmp), 1, self.target, [7], [4, 7])
+            )
+
+    def test_shifted_date_window_is_pending_when_base_date_is_supplied(self) -> None:
+        with TemporaryDirectory() as tmp:
+            property_dir = expected_property_dir(Path(tmp), 1, self.target)
+            _write_jsonl(property_dir / "room_inventory.jsonl", [_inventory_record(self.target)])
+            _write_jsonl(
+                property_dir / "price_rows.jsonl",
+                [_price_record(self.target, 7, 4)],
+            )
+
+            self.assertFalse(
+                is_property_complete(
+                    Path(tmp),
+                    1,
+                    self.target,
+                    [7],
+                    [4],
+                    search_base_date=date(2026, 6, 22),
+                )
+            )
+            self.assertTrue(
+                is_property_complete(
+                    Path(tmp),
+                    1,
+                    self.target,
+                    [7],
+                    [4],
+                    search_base_date=date(2026, 6, 24),
+                )
             )
 
     def test_all_empty_availability_windows_complete_sold_out_property(self) -> None:

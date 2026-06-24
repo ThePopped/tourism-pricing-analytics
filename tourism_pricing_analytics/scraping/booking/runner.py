@@ -1,7 +1,7 @@
 import logging
 import random
 from dataclasses import replace
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from playwright.sync_api import BrowserContext, Page, Playwright, sync_playwright
@@ -32,6 +32,7 @@ from tourism_pricing_analytics.scraping.booking.io import (
     save_property_room_features,
     save_property_room_inventory,
     save_validation_report,
+    resolve_run_search_base_date,
     setup_logging,
 )
 from tourism_pricing_analytics.scraping.booking.models import (
@@ -379,6 +380,7 @@ def run_price_loop(
     page: Page | None,
     scraper_config: ScraperConfig,
     property_output_dirs: dict[str, Path],
+    search_base_date: date | None = None,
 ) -> tuple[Page | None, list[PriceRowRecord], list[RoomFeatureRecord], list[ScrapeFailureRecord]]:
     records: list[PriceRowRecord] = []
     room_feature_records: list[RoomFeatureRecord] = []
@@ -395,7 +397,11 @@ def run_price_loop(
 
         for lead_time_days in scraper_config.lead_times:
             for stay_length_days in scraper_config.stay_lengths:
-                checkin, checkout = build_date_window(lead_time_days, stay_length_days)
+                checkin, checkout = build_date_window(
+                    lead_time_days,
+                    stay_length_days,
+                    base_date=search_base_date,
+                )
                 dated_url = build_dated_url(
                     target.url,
                     checkin=checkin,
@@ -637,7 +643,9 @@ def run(
     all_targets: list[PropertyTarget] | None = None,
     finalize_run: bool = True,
     worker_id: str | None = None,
+    search_base_date: date | None = None,
 ) -> None:
+    search_base_date = search_base_date or resolve_run_search_base_date(run_dir)
     browser = playwright.chromium.launch(
         headless=scraper_config.browser.headless,
         slow_mo=scraper_config.browser.slow_mo_ms,
@@ -665,6 +673,7 @@ def run(
             indexed_requested_properties,
             scraper_config.lead_times,
             scraper_config.stay_lengths,
+            search_base_date,
         )
         pending_properties = [item.target for item in indexed_pending_properties]
         skipped_count = len(indexed_requested_properties) - len(pending_properties)
@@ -713,6 +722,7 @@ def run(
             page=page,
             scraper_config=active_config,
             property_output_dirs=property_output_dirs,
+            search_base_date=search_base_date,
         )
         failure_records = room_inventory_failures + price_row_failures
 
@@ -758,8 +768,10 @@ def main() -> None:
 
     run_dir = create_run_dir(scraper_config.output_root)
     setup_logging(run_dir / "scrape_debug.log")
+    search_base_date = resolve_run_search_base_date(run_dir)
 
     logging.info("Run output directory: %s", run_dir)
+    logging.info("Search base date: %s", search_base_date.isoformat())
     logging.info("Starting scraper")
     logging.info("Configured property count: %d", len(scraper_config.properties))
     logging.info("Configured lead times: %s", scraper_config.lead_times)
@@ -772,6 +784,11 @@ def main() -> None:
     )
 
     with sync_playwright() as playwright:
-        run(playwright, scraper_config, run_dir)
+        run(
+            playwright,
+            scraper_config,
+            run_dir,
+            search_base_date=search_base_date,
+        )
 
     logging.info("Finished")

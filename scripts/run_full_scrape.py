@@ -13,7 +13,11 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from config import CONFIG_DIR
 from tourism_pricing_analytics.scraping.booking.config import load_scraper_config
-from tourism_pricing_analytics.scraping.booking.io import create_run_dir, setup_logging
+from tourism_pricing_analytics.scraping.booking.io import (
+    create_run_dir,
+    resolve_run_search_base_date,
+    setup_logging,
+)
 from tourism_pricing_analytics.scraping.booking.runner import (
     build_and_save_modelling_table,
     run,
@@ -67,7 +71,10 @@ def _worker_entry(
     run_dir: str,
     worker_id: int,
     target_urls: list[str],
+    search_base_date_iso: str,
 ) -> None:
+    from datetime import date
+
     from playwright.sync_api import sync_playwright
 
     scraper_config = load_scraper_config(Path(config_path))
@@ -79,8 +86,10 @@ def _worker_entry(
     random.seed(scraper_config.seed + worker_id)
     worker_label = f"worker-{worker_id:02d}"
     run_path = Path(run_dir)
+    search_base_date = date.fromisoformat(search_base_date_iso)
     setup_logging(run_path / f"scrape_debug_{worker_label}.log")
     logging.info("%s starting with %d assigned targets", worker_label, len(worker_targets))
+    logging.info("%s search base date: %s", worker_label, search_base_date.isoformat())
 
     with sync_playwright() as playwright:
         run(
@@ -91,6 +100,7 @@ def _worker_entry(
             all_targets=scraper_config.properties,
             finalize_run=False,
             worker_id=worker_label,
+            search_base_date=search_base_date,
         )
 
     logging.info("%s finished", worker_label)
@@ -109,6 +119,7 @@ def main() -> None:
     run_dir = args.run_dir or create_run_dir(scraper_config.output_root)
     run_dir.mkdir(parents=True, exist_ok=True)
     setup_logging(run_dir / "scrape_debug.log")
+    search_base_date = resolve_run_search_base_date(run_dir)
 
     configured_targets = scraper_config.properties
     selected_targets = (
@@ -124,10 +135,12 @@ def main() -> None:
         indexed_selected_targets,
         scraper_config.lead_times,
         scraper_config.stay_lengths,
+        search_base_date,
     )
     shards = split_indexed_targets(indexed_pending_targets, args.workers)
 
     logging.info("Run output directory: %s", run_dir)
+    logging.info("Search base date: %s", search_base_date.isoformat())
     logging.info("Config path: %s", args.config)
     logging.info("Configured property count: %d", len(configured_targets))
     logging.info("Selected property count: %d", len(indexed_selected_targets))
@@ -147,6 +160,7 @@ def main() -> None:
                 str(run_dir),
                 worker_index,
                 [item.target.url for item in shard],
+                search_base_date.isoformat(),
             ),
             name=f"booking-scrape-worker-{worker_index:02d}",
         )

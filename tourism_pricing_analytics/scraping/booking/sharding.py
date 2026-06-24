@@ -2,6 +2,7 @@
 
 import logging
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
 from tourism_pricing_analytics.scraping.booking.io import save_jsonl_file
@@ -54,6 +55,7 @@ def pending_indexed_targets(
     targets: list[IndexedTarget],
     lead_times: list[int],
     stay_lengths: list[int],
+    search_base_date: date | None = None,
 ) -> list[IndexedTarget]:
     """Return indexed targets whose persisted artifacts are incomplete."""
 
@@ -66,6 +68,7 @@ def pending_indexed_targets(
             item.target,
             lead_times,
             stay_lengths,
+            search_base_date,
         )
     ]
 
