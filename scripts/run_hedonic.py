@@ -105,6 +105,60 @@ def _distribution(series: pd.Series) -> dict[str, float | int | None]:
     }
 
 
+def _json_safe_value(value: object) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, pd.Timestamp):
+        return value.date().isoformat()
+    if hasattr(value, "isoformat") and value.__class__.__name__ in {"date", "datetime"}:
+        return value.isoformat()
+    if isinstance(value, float) and pd.isna(value):
+        return None
+    if value is pd.NA:
+        return None
+    if hasattr(value, "item"):
+        return _json_safe_value(value.item())
+    return value
+
+
+def _adjusted_peer_row_records(adjusted_rows: pd.DataFrame) -> list[dict[str, Any]]:
+    columns = [
+        "property_name",
+        "property_url",
+        "room_id",
+        "room_name",
+        "block_id",
+        "checkin",
+        "checkout",
+        "lead_time_days",
+        "stay_length_days",
+        "price_per_night",
+        "predicted_peer_price_per_night",
+        "predicted_client_like_price_per_night",
+        "feature_adjustment_factor",
+        "feature_adjusted_price_per_night",
+    ]
+    available = [column for column in columns if column in adjusted_rows]
+    sort_columns = [
+        column
+        for column in [
+            "property_name",
+            "property_url",
+            "checkin",
+            "stay_length_days",
+            "lead_time_days",
+            "room_id",
+            "block_id",
+        ]
+        if column in adjusted_rows
+    ]
+    rows = adjusted_rows.sort_values(sort_columns)[available] if sort_columns else adjusted_rows[available]
+    return [
+        {key: _json_safe_value(value) for key, value in record.items()}
+        for record in rows.to_dict(orient="records")
+    ]
+
+
 def _fmt_money(value: object) -> str:
     if value is None:
         return "n/a"
@@ -261,6 +315,7 @@ def build_report_payload(
         "ols_coefficients": _coefficient_records(bundle),
         "benchmark": benchmark,
         "adjusted_peer_price_distribution": adjusted_distribution,
+        "adjusted_peer_price_rows": _adjusted_peer_row_records(adjusted_rows),
         "gap_explanation": gap,
     }
 

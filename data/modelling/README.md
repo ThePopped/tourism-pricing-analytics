@@ -15,6 +15,13 @@ The source run directory is generated local data and remains git-ignored. This
 Parquet file is committed so analysis code has a stable input without requiring
 the full scrape artifacts.
 
+`competitive_pricing_workbook.xlsx` is a client-facing export built from the
+same table, comparable benchmark, and hedonic adjustment helpers:
+
+- Export command: `.\.venv\Scripts\python.exe scripts\export_pricing_workbook.py`
+- Sheets: summary, benchmark windows, peer set, raw peer rows, adjusted peer
+  rows, and gap decomposition
+
 Nested fields are JSON-encoded strings in Parquet for deterministic round trips:
 
 - `quantity_options`

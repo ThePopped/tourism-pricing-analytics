@@ -178,6 +178,9 @@ class HedonicModelTests(unittest.TestCase):
         )
         report = render_markdown_report(payload)
 
+        self.assertIn("adjusted_peer_price_rows", payload)
+        self.assertGreater(len(payload["adjusted_peer_price_rows"]), 0)
+        self.assertIn("feature_adjusted_price_per_night", payload["adjusted_peer_price_rows"][0])
         self.assertIn("# Hedonic Price Adjustment", report)
         self.assertIn("Feature-Adjusted Comparable Benchmark", report)
         self.assertIn("Price Gap Decomposition", report)
