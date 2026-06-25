@@ -3,7 +3,8 @@
 ## Active Focus
 
 The Booking.com scraper scale-up is complete and stable. The downstream
-competitive pricing analytics roadmap is now implemented through Phase 3.
+competitive pricing analytics roadmap is implemented through Phase 3, and the
+first productization/quality-hardening milestone is complete.
 
 The agreed analytics direction remains **comparables-first**, with hedonic
 modelling as the adjustment and explanation layer:
@@ -202,18 +203,62 @@ Notes:
   directional talking points rather than a causal model. The grouped GBM output
   is the preferred adjustment engine.
 
+### Productization And Quality Hardening 1
+
+Status: **complete and committed** as
+`7eada1b Harden analytics reports and property type parsing`.
+
+Implemented:
+
+- Added report-level contract tests in `tests/test_report_outputs.py`:
+  - `data/modelling/competitor_report.md` must retain client, benchmark-window,
+    peer-price-position, and top-comparable sections.
+  - `data/modelling/hedonic_report.md` must retain training, OLS, adjusted
+    benchmark, and price-gap decomposition sections.
+- Added `data/modelling/client_spec_example.json`, a hand-entered apartment
+  profile compatible with `scripts/run_competitors.py --spec-path`.
+- Tightened `PropertyTypeExtractor` so property-name parentheticals such as
+  `MYLOS (6)` and adult-only labels do not become `property_type`.
+- Added parser regression tests covering:
+  - `MYLOS (6) (Apartment) ...` resolves to `Apartment`.
+  - `(Exclusive Adults Only) (Resort) ...` resolves to `Resort`.
+  - unknown/numeric-only parentheticals are ignored.
+
+Verification passed:
+
+- `.\.venv\Scripts\python.exe -m unittest tests.test_property_feature_extractors tests.test_report_outputs`:
+  18 tests OK.
+- `.\.venv\Scripts\python.exe -m compileall tourism_pricing_analytics scripts notebooks config.py`
+- `.\.venv\Scripts\python.exe -m unittest discover -s tests`: 215 tests OK.
+- `.\.venv\Scripts\python.exe scripts\summarize_modelling_table.py`
+- `.\.venv\Scripts\python.exe scripts\run_comparable_benchmark.py --limit 1 --max-peers 3`
+- `.\.venv\Scripts\python.exe scripts\run_competitors.py --max-peers 10 --min-peer-price-rows 5`
+- `.\.venv\Scripts\python.exe scripts\run_hedonic.py --max-peers 10 --min-token-frequency 25`
+- `.\.venv\Scripts\python.exe scripts\run_competitors.py --spec-path data\modelling\client_spec_example.json --lead-time-days 30 --stay-length-days 4 --season peak --max-peers 10 --min-peer-price-rows 5`
+
+Spec example validation:
+
+- The 30-day peak, 4-night example returned 4 peer price rows across 2 priced
+  peer properties.
+- Peer median: EUR 209.38/night.
+- Example client reference price: EUR 180.00/night.
+- Example percentile vs peers: 25.0%.
+- Gap to peer median: EUR -29.38, about -14.0%.
+
 ## Next Recommended Step
 
-The core roadmap is implemented. Suggested next steps are now productization and
-quality hardening:
+The core roadmap and first hardening pass are implemented. Remaining suggested
+next steps are productization choices:
 
 - Decide the next deliverable format: static markdown report refinement,
   spreadsheet export, or a small dashboard.
-- Add report-level tests that assert the real-data markdown reports contain the
-  key client, peer, adjusted benchmark, and residual-gap sections.
-- Add a parser regression check for the tiny `property_type == "6"` glitch.
-- Add an optional client-spec example JSON under `data/modelling/` for manual
-  apartment/villa scenarios.
+- If staying with markdown, refine `competitor_report.md` and
+  `hedonic_report.md` into a client-facing narrative rather than raw technical
+  outputs.
+- If choosing spreadsheet export, add an `.xlsx` writer with summary, peer set,
+  raw peer rows, adjusted peer rows, and gap decomposition tabs.
+- If choosing a dashboard, build a small local app over the committed Parquet and
+  current analysis helpers.
 - Consider a future varied-occupancy scrape for large villas, because current
   villa prices are still 2-guest offers and under-serve whole-villa pricing.
 - Consider recurring scrape cadence only if the goal shifts from competitive
@@ -287,9 +332,11 @@ High-level modules:
 - **Null room ids.** 12 rows still have null `room_id` after exact
   `(property_url, room_name)` reconciliation. These are honest unattributed rate
   rows rather than fuzzy matches.
-- **Spurious property type.** A tiny number of rows have `property_type == "6"`.
-  The self-catering segment excludes this, but a parser regression check is
-  worth adding later.
+- **Historic spurious property types.** The committed modelling table still
+  contains historic rows with `property_type == "6"` and adult-only labels from
+  the earlier scrape. The self-catering segment excludes them. The extractor is
+  now hardened so future scrapes should ignore property-name/adult-only
+  parentheticals and keep the actual accommodation label.
 - **Sparse bed fields.** Structured bed information is absent on many Booking
   room blocks, so `bed_types` and `bed_count` are sparse by design.
 - **Missing ratings and policy times.** Some properties have no official
@@ -306,6 +353,7 @@ High-level modules:
 
 Latest relevant commits:
 
+- `7eada1b Harden analytics reports and property type parsing`
 - `26ee7fb Add hedonic price adjustment analysis`
 - `f14e430 Complete comparable benchmark contract`
 - `d803b7a Update session notes for comparables roadmap`
