@@ -67,6 +67,61 @@ class FailureClassificationTests(unittest.TestCase):
         self.assertIsNotNone(classification)
         self.assertEqual(classification.category, "empty_availability")
 
+    def test_classifies_no_reservations_curly_apostrophe(self) -> None:
+        # No room table + "isn't taking reservations" banner with a curly U+2019
+        # apostrophe. The property-page padding would otherwise make this look
+        # like selector_drift; it must be empty_availability instead.
+        classification = classify_page_failure(
+            padded_html(
+                "Property highlights. Room type. We’re sorry, but this "
+                "property isn’t taking reservations on our site right now."
+            ),
+            final_url=REQUESTED_URL,
+            requested_url=REQUESTED_URL,
+            expected_selector_count=0,
+            fallback_selector_count=2,
+            status_code=200,
+        )
+
+        self.assertIsNotNone(classification)
+        self.assertEqual(classification.category, "empty_availability")
+
+    def test_classifies_currently_not_possible_to_make_reservations(self) -> None:
+        # Sibling wording seen on other not-bookable properties (e.g.
+        # 102_akrogiali): "currently not possible to make reservations".
+        classification = classify_page_failure(
+            padded_html(
+                "Property highlights. Room type. We're sorry, but it is "
+                "currently not possible to make reservations for this hotel "
+                "on our site."
+            ),
+            final_url=REQUESTED_URL,
+            requested_url=REQUESTED_URL,
+            expected_selector_count=0,
+            fallback_selector_count=2,
+            status_code=200,
+        )
+
+        self.assertIsNotNone(classification)
+        self.assertEqual(classification.category, "empty_availability")
+
+    def test_classifies_no_reservations_fixture(self) -> None:
+        html = (FIXTURE_DIR / "hotel_off_no_reservations.html").read_text(
+            encoding="utf-8"
+        )
+
+        classification = classify_page_failure(
+            html,
+            final_url=REQUESTED_URL,
+            requested_url=REQUESTED_URL,
+            expected_selector_count=0,
+            fallback_selector_count=2,
+            status_code=200,
+        )
+
+        self.assertIsNotNone(classification)
+        self.assertEqual(classification.category, "empty_availability")
+
     def test_ignores_temporary_error_text_inside_scripts(self) -> None:
         classification = classify_page_failure(
             padded_html(

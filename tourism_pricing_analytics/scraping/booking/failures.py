@@ -41,6 +41,11 @@ EMPTY_AVAILABILITY_PATTERNS = [
     "try different dates",
     "no rooms available",
     "we're sorry, but it is not possible",
+    # No-room-table "not bookable" pages: HTTP 200 with no room table at all and
+    # a sorry/no-reservations marker. Previously misclassified as selector_drift.
+    "isn't taking reservations",
+    "not taking reservations",
+    "not possible to make reservations",
 ]
 
 PROPERTY_PAGE_PATTERNS = [
@@ -91,6 +96,10 @@ def normalize_page_text(html: str | None) -> str:
     parser = VisibleTextParser()
     parser.feed(html)
     visible_text = parser.get_text() or html
+    # Booking renders curly typographic apostrophes (U+2018/U+2019) in messages
+    # such as "this property isn't taking reservations", so fold them to a plain
+    # ASCII apostrophe before pattern matching.
+    visible_text = visible_text.replace("’", "'").replace("‘", "'")
     return re.sub(r"\s+", " ", visible_text).strip().lower()
 
 

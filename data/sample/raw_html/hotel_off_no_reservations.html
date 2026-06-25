@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en-gb">
+  <head>
+    <meta charset="utf-8">
+    <title>Booking.com no-reservations fixture</title>
+    <!--
+      Compact fixture promoted from generated live snapshot:
+      saved_dom/runs/20260623_222416_346202/064_hotel_off/
+      price_rows_selector_drift_lead_007_stay_004.html
+
+      A "not bookable" property: HTTP 200, no room table at all
+      (0 tr.js-rt-block-row), with a curly-apostrophe (U+2019) sorry banner.
+      Previously misclassified as selector_drift because the expected room
+      selectors are absent and ordinary property-page markers are present.
+      Curly apostrophes are intentional to exercise apostrophe folding.
+    -->
+    <script>
+      window.translations = {"error": {"generic": "server error"}};
+    </script>
+  </head>
+  <body>
+    <div id="hp_nav_tabs">overview prices facilities house rules important &amp; legal info guest reviews (616)</div>
+    <main>
+      <h1>Hotel Off</h1>
+      <section id="availability_target" class="hp_availability">
+        <p class="sorry">
+          ! we’re sorry, but this property isn’t taking reservations on our site
+          right now. don’t worry, you can find tons of other nearby properties
+          right here.
+        </p>
+        <p>limited supply in chania town for your dates: 58 hotels like this are already unavailable on our site</p>
+      </section>
+      <section class="property_highlights">
+        Property highlights. Room type. Select rooms. Facilities. Guest reviews.
+      </section>
+    </main>
+  </body>
+</html>
