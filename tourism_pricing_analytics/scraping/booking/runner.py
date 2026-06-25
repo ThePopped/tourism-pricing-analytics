@@ -68,7 +68,6 @@ from tourism_pricing_analytics.scraping.booking.urls import (
 from tourism_pricing_analytics.scraping.booking.validation import (
     validate_run_directory,
 )
-from tourism_pricing_analytics.features.build_features import build_features_from_run
 
 
 ROOM_INVENTORY_SELECTOR = '[href^="#RD"]'
@@ -627,6 +626,8 @@ def validate_and_report_run(run_dir: Path) -> None:
 
 def build_and_save_modelling_table(run_dir: Path) -> int:
     """Build and persist the Layer 2 modelling table for a completed run."""
+
+    from tourism_pricing_analytics.features.build_features import build_features_from_run
 
     rows = build_features_from_run(run_dir)
     save_jsonl_file(rows, run_dir / "modelling_table.jsonl")
