@@ -15,12 +15,32 @@ from playwright.sync_api import sync_playwright
 from tourism_pricing_analytics.scraping.booking.features.extract_property import (
     extract_property_features,
 )
+from tourism_pricing_analytics.scraping.booking.features.property.prop_type import (
+    _property_type_from_breadcrumb,
+)
 
 
 FIXTURE_DIR = Path(__file__).resolve().parent.parent / "data" / "sample" / "raw_html"
 ELIA_PALATINO_FIXTURE = FIXTURE_DIR / "elia_palatino_listing_page.html"
 PROPERTY_URL = "https://www.booking.com/hotel/gr/elia-palatino.en-gb.html"
 CAPTURED_AT = "2026-06-20T00:00:00"
+
+
+class PropertyTypeBreadcrumbTests(unittest.TestCase):
+    def test_property_name_parentheses_do_not_become_property_type(self) -> None:
+        text = "MYLOS (6) (Apartment) (Greece) deals"
+
+        self.assertEqual(_property_type_from_breadcrumb(text), "Apartment")
+
+    def test_adults_only_parentheses_do_not_become_property_type(self) -> None:
+        text = "Giannoulis - Grand Bay Beach Resort (Exclusive Adults Only) (Resort) (Greece) deals"
+
+        self.assertEqual(_property_type_from_breadcrumb(text), "Resort")
+
+    def test_unknown_parentheticals_are_ignored(self) -> None:
+        text = "Mystery Stay (6) (Greece) deals"
+
+        self.assertIsNone(_property_type_from_breadcrumb(text))
 
 
 class EliaPalatinoPropertyFeatureTests(unittest.TestCase):

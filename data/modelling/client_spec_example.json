@@ -1,0 +1,22 @@
+{
+  "property_name": "Example Chania Apartment",
+  "property_type": "Apartment",
+  "latitude": 35.5138,
+  "longitude": 24.018,
+  "room_size_sqm": 55,
+  "bed_count": 2,
+  "star_rating": 4,
+  "review_score": 9.1,
+  "amenities": [
+    "Kitchen",
+    "Balcony",
+    "Air conditioning",
+    "Washing machine"
+  ],
+  "property_facilities": [
+    "Free WiFi",
+    "Parking",
+    "Non-smoking rooms"
+  ],
+  "price_per_night": 180
+}
