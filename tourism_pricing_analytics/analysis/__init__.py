@@ -10,6 +10,12 @@ from tourism_pricing_analytics.analysis.competitors import (
     peer_price_benchmark,
     rank_competitors,
 )
+from tourism_pricing_analytics.analysis.dashboard import (
+    render_index_html,
+    shape_dashboard_payload,
+    subject_catalog,
+    window_options,
+)
 from tourism_pricing_analytics.analysis.eda import modelling_table_summary
 from tourism_pricing_analytics.analysis.hedonic import (
     HedonicFeatureMeta,
@@ -41,5 +47,9 @@ __all__ = [
     "modelling_table_summary",
     "peer_price_benchmark",
     "rank_competitors",
+    "render_index_html",
     "segment_self_catering",
+    "shape_dashboard_payload",
+    "subject_catalog",
+    "window_options",
 ]

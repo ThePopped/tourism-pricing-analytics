@@ -19,6 +19,7 @@ from tourism_pricing_analytics.analysis.competitors import (
     peer_price_benchmark,
 )
 from tourism_pricing_analytics.analysis.hedonic import (
+    HedonicModelBundle,
     explain_price_gap,
     feature_adjusted_peer_prices,
     fit_hedonic_models,
@@ -271,8 +272,10 @@ def build_report_payload(
     max_peers: int = ComparableBenchmarkConfig.max_peers,
     max_distance_km: float = ComparableBenchmarkConfig.max_distance_km,
     min_token_frequency: int = 25,
+    bundle: HedonicModelBundle | None = None,
 ) -> dict[str, Any]:
-    bundle = fit_hedonic_models(frame, min_token_frequency=min_token_frequency)
+    if bundle is None:
+        bundle = fit_hedonic_models(frame, min_token_frequency=min_token_frequency)
     benchmark = peer_price_benchmark(
         client,
         frame,

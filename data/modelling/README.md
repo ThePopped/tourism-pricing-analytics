@@ -22,6 +22,16 @@ same table, comparable benchmark, and hedonic adjustment helpers:
 - Sheets: summary, benchmark windows, peer set, raw peer rows, adjusted peer
   rows, and gap decomposition
 
+`scripts\run_dashboard.py` serves an interactive local view over this same
+table and the comparable/hedonic helpers:
+
+- Run command: `.\.venv\Scripts\python.exe scripts\run_dashboard.py`
+- Zero extra dependencies: a stdlib `http.server` app that fits the hedonic
+  model once at startup, then re-runs only the peer benchmark per selection.
+- Pick a self-catering subject property and benchmark window in the browser to
+  see peer price position, the feature-adjusted benchmark, and the price-gap
+  decomposition.
+
 Nested fields are JSON-encoded strings in Parquet for deterministic round trips:
 
 - `quantity_options`
