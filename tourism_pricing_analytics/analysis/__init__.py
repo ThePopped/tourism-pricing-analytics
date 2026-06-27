@@ -27,6 +27,7 @@ from tourism_pricing_analytics.analysis.hedonic import (
     group_kfold_splits,
 )
 from tourism_pricing_analytics.analysis.loader import load_modelling_table
+from tourism_pricing_analytics.analysis.narrative import render_positioning_narrative
 from tourism_pricing_analytics.analysis.segment import segment_self_catering
 
 __all__ = [
@@ -48,6 +49,7 @@ __all__ = [
     "peer_price_benchmark",
     "rank_competitors",
     "render_index_html",
+    "render_positioning_narrative",
     "segment_self_catering",
     "shape_dashboard_payload",
     "subject_catalog",

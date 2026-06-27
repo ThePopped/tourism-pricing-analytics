@@ -48,6 +48,25 @@ class MarkdownReportOutputTests(unittest.TestCase):
                 self.assertIn(fragment, report)
 
 
+    def test_positioning_narrative_contains_client_facing_sections(self) -> None:
+        report = (MODELLING_DIR / "positioning_narrative.md").read_text(encoding="utf-8")
+
+        required_fragments = [
+            "# Competitive Pricing Position: Anna's House",
+            "## Bottom line",
+            "## Who you are compared against",
+            "## Your price position today",
+            "## Is the premium justified?",
+            "## Recommendation",
+            "## How to read these numbers",
+            "Justified by stronger features:",
+            "Unexplained premium",
+        ]
+        for fragment in required_fragments:
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, report)
+
+
 class ClientSpecExampleTests(unittest.TestCase):
     def test_client_spec_example_contains_supported_hand_entered_fields(self) -> None:
         spec_path = MODELLING_DIR / "client_spec_example.json"

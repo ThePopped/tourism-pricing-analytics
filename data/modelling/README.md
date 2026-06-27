@@ -22,6 +22,15 @@ same table, comparable benchmark, and hedonic adjustment helpers:
 - Sheets: summary, benchmark windows, peer set, raw peer rows, adjusted peer
   rows, and gap decomposition
 
+`positioning_narrative.md` is a single client-facing positioning narrative that
+turns the raw figures in `competitor_report.md` and `hedonic_report.md` into
+plain-language prose for a non-technical operator:
+
+- Run command: `.\.venv\Scripts\python.exe scripts\run_positioning_narrative.py`
+- Reuses the same hedonic report payload as the workbook and dashboard, then
+  renders a bottom line, peer set, price position, a feature-justified vs
+  unexplained premium split, a recommendation, and interpretation caveats.
+
 `scripts\run_dashboard.py` serves an interactive local view over this same
 table and the comparable/hedonic helpers:
 
