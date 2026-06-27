@@ -3,8 +3,10 @@
 ## Active Focus
 
 The Booking.com scraper scale-up is complete and stable. The downstream
-competitive pricing analytics roadmap is implemented through Phase 3, and the
-first productization/quality-hardening milestone is complete.
+competitive pricing analytics roadmap is implemented through Phase 3, and three
+productization deliverables now sit on top of it: a client-facing Excel workbook
+export, a small interactive local dashboard, and a single plain-language
+positioning narrative report.
 
 The agreed analytics direction remains **comparables-first**, with hedonic
 modelling as the adjustment and explanation layer:
@@ -178,27 +180,9 @@ Real-data Phase 3 report:
 - Default subject: Anna's House
 - Raw peer median: EUR 159.00
 - Feature-adjusted peer median: EUR 237.70
-- Feature-adjusted peer IQR: EUR 213.50 to EUR 259.13
-- Sample observed gap: EUR 59.21
-- Sample feature-explained gap: EUR 86.05
-- Sample residual gap: EUR -26.84
-
-Phase 3 verification passed:
-
-- `.\.venv\Scripts\python.exe -m pip install --no-build-isolation -e ".[dev]"`
-- `.\.venv\Scripts\python.exe -m compileall tourism_pricing_analytics scripts notebooks config.py`
-- `.\.venv\Scripts\python.exe scripts\summarize_modelling_table.py`
-- `.\.venv\Scripts\python.exe scripts\run_comparable_benchmark.py --limit 1 --max-peers 3`
-- `.\.venv\Scripts\python.exe scripts\run_competitors.py --max-peers 10 --min-peer-price-rows 5`
-- `.\.venv\Scripts\python.exe scripts\run_hedonic.py --max-peers 10 --min-token-frequency 25`
-- `.\.venv\Scripts\python.exe -m unittest tests.test_hedonic`: 4 tests OK.
-- `.\.venv\Scripts\python.exe -m unittest discover -s tests`: 209 tests OK.
 
 Notes:
 
-- A normal build-isolated editable install tried to reach PyPI for build
-  dependencies and was blocked by the sandbox. The no-build-isolation install
-  succeeded using the already-installed local build toolchain.
 - The OLS condition number remains high, so use the OLS coefficient table as
   directional talking points rather than a causal model. The grouped GBM output
   is the preferred adjustment engine.
@@ -210,59 +194,152 @@ Status: **complete and committed** as
 
 Implemented:
 
-- Added report-level contract tests in `tests/test_report_outputs.py`:
-  - `data/modelling/competitor_report.md` must retain client, benchmark-window,
-    peer-price-position, and top-comparable sections.
-  - `data/modelling/hedonic_report.md` must retain training, OLS, adjusted
-    benchmark, and price-gap decomposition sections.
+- Added report-level contract tests in `tests/test_report_outputs.py` for the
+  competitor and hedonic markdown reports.
 - Added `data/modelling/client_spec_example.json`, a hand-entered apartment
   profile compatible with `scripts/run_competitors.py --spec-path`.
 - Tightened `PropertyTypeExtractor` so property-name parentheticals such as
-  `MYLOS (6)` and adult-only labels do not become `property_type`.
-- Added parser regression tests covering:
-  - `MYLOS (6) (Apartment) ...` resolves to `Apartment`.
-  - `(Exclusive Adults Only) (Resort) ...` resolves to `Resort`.
-  - unknown/numeric-only parentheticals are ignored.
+  `MYLOS (6)` and adult-only labels do not become `property_type`, with parser
+  regression tests.
 
-Verification passed:
+### Productization: Pricing Workbook Export
 
-- `.\.venv\Scripts\python.exe -m unittest tests.test_property_feature_extractors tests.test_report_outputs`:
-  18 tests OK.
+Status: **complete and committed** as
+`dad29b4 Add competitive pricing workbook export`.
+
+Implemented:
+
+- Added `scripts/export_pricing_workbook.py`, which builds a client-facing
+  `.xlsx` from the modelling table plus the comparable and hedonic helpers. The
+  writer is hand-rolled OOXML (zipped sheet/styles XML) so it adds **no** new
+  dependency such as openpyxl.
+- Committed output at `data/modelling/competitive_pricing_workbook.xlsx`.
+- Sheets: summary, benchmark windows, peer set, raw peer rows, adjusted peer
+  rows, and gap decomposition.
+- Added `tests/test_pricing_workbook_export.py`.
+- Reuses `build_report_payload` from `scripts/run_hedonic.py` as the single
+  source of payload assembly.
+
+### Productization: Local Competitive Pricing Dashboard
+
+Status: **complete and committed** as
+`82f6b90 Add local competitive pricing dashboard`.
+
+This is the chosen "small dashboard" deliverable from the prior open product
+fork. It is a **zero-dependency** local app, consistent with the project's
+minimal-dependency philosophy and able to run offline (PyPI is blocked in the
+sandbox, so Streamlit/Flask were intentionally avoided).
+
+Implemented:
+
+- Added `tourism_pricing_analytics/analysis/dashboard.py` with the pure,
+  testable pieces:
+  - `subject_catalog(frame)`: deterministic self-catering subject list with
+    type, price-row count, and median price; ordered to match the report
+    runners' default subject.
+  - `window_options(frame)`: distinct `lead_time_days`, `stay_length_days`,
+    `crete_season`, and `checkin` values for the UI selectors.
+  - `shape_dashboard_payload(report_payload)`: compacts a full hedonic report
+    payload into a JSON-safe front-end payload (KPIs, peer/adjusted
+    distributions, ranked peer table, gap decomposition, top OLS premia).
+  - `render_index_html()`: the static single-page HTML/JS shell (inline CSS, an
+    SVG price-position scale, vanilla-JS fetch and render). No template engine.
+- Added `scripts/run_dashboard.py`, a stdlib `http.server` (`ThreadingHTTPServer`)
+  app that:
+  - Loads the modelling table and fits the hedonic model **once** at startup via
+    a cached `DashboardService`.
+  - Serves `/` (the page), `/api/meta` (subject catalog + window options), and
+    `/api/benchmark` (per-selection peer benchmark, reusing the cached bundle).
+  - Returns clean JSON errors (400 for an invalid subject, 404 for unknown
+    routes). Flags `--host`, `--port`, `--min-token-frequency`, `--no-browser`.
+- Let `scripts/run_hedonic.build_report_payload` accept an optional pre-fit
+  `bundle` (backward compatible) so the dashboard avoids refitting per request.
+- Exported the dashboard helpers from
+  `tourism_pricing_analytics/analysis/__init__.py`.
+- Added `tests/test_dashboard.py`: catalog ordering/segmentation, window
+  options, payload shaping/JSON-safety, HTML shell mount points, and the
+  cached-bundle service (verifies the bundle is reused, not refit).
+- Documented the runner in `data/modelling/README.md`.
+
+Real-data dashboard validation (live `http.server` run over the committed
+Parquet):
+
+- Catalog: 154 self-catering subjects; default subject Anna's House.
+- Window options: lead times 7/30/60, stays 4/7, seasons peak/shoulder.
+- Index served at 200 (~13 KB HTML).
+- Sample benchmark (lead_time=30, stay=4, max_peers=10): peer median EUR 209.75,
+  feature-adjusted peer median EUR 264.18, subject median EUR 418.00, subject
+  percentile 100.0%, 9 peers, no flags.
+- Error paths confirmed: invalid `subject_url` returned HTTP 400 JSON; unknown
+  route returned HTTP 404.
+
+### Productization: Client-Facing Positioning Narrative
+
+Status: **complete and committed** as
+`c729bf4 Add client-facing positioning narrative report`.
+
+This is the previously open "markdown narrative refinement" deliverable: it
+turns the raw technical numbers in `competitor_report.md` and `hedonic_report.md`
+into a single plain-language positioning narrative for a non-technical operator.
+
+Implemented:
+
+- Added `tourism_pricing_analytics/analysis/narrative.py` with a pure,
+  missing-safe `render_positioning_narrative(payload)`. It consumes the existing
+  hedonic report payload (no data load or model fit) and renders sections:
+  Bottom line, Who you are compared against, Your price position today, Is the
+  premium justified?, Recommendation, and How to read these numbers.
+- The position is classified by the **residual premium share**, i.e. the
+  subject's price above (or below) the feature-matched comparable median as a
+  fraction of that median. This isolates the actionable gap after crediting the
+  subject for its stronger features: `>15%` over reads as an unjustified
+  premium, `5-15%` mixed, `-5%..5%` fair, below `-5%` underpriced. (An earlier
+  draft compared residual vs feature magnitudes and mislabeled a clear premium
+  as "modest/defensible"; the residual-share read is the corrected logic.)
+- Distribution-level gap decomposition in the report: feature-justified premium
+  = adjusted peer median - raw peer median; unexplained premium = subject median
+  - adjusted peer median.
+- Added `scripts/run_positioning_narrative.py`, reusing `build_report_payload`
+  from `scripts/run_hedonic.py` (same assembly as the workbook and dashboard).
+  It writes `data/modelling/positioning_narrative.md` and can optionally write
+  JSON. Same CLI surface as `run_hedonic.py` (subject URL or hand-entered spec,
+  windows, peer/distance/token-frequency flags).
+- Exported `render_positioning_narrative` from
+  `tourism_pricing_analytics/analysis/__init__.py`.
+- Added `tests/test_narrative.py` (synthetic-payload tests for all sections,
+  premium vs underpriced language, distribution decomposition, and
+  missing-figure safety) and extended `tests/test_report_outputs.py` with a
+  contract test for the committed narrative file.
+- Documented the runner in `data/modelling/README.md`.
+
+Real-data narrative (default subject Anna's House):
+
+- Output: `data/modelling/positioning_narrative.md`
+- Position: priced above comparable rivals, at the very top of the peer set,
+  ~92.9% over the peer median.
+- Feature-justified premium: EUR 78.70; unexplained premium: EUR 69.03 (~29%
+  above the feature-matched comparable median) -> classified as an unjustified
+  premium to defend or watch.
+
+Verification passed (full sweep):
+
 - `.\.venv\Scripts\python.exe -m compileall tourism_pricing_analytics scripts notebooks config.py`
-- `.\.venv\Scripts\python.exe -m unittest discover -s tests`: 215 tests OK.
-- `.\.venv\Scripts\python.exe scripts\summarize_modelling_table.py`
-- `.\.venv\Scripts\python.exe scripts\run_comparable_benchmark.py --limit 1 --max-peers 3`
-- `.\.venv\Scripts\python.exe scripts\run_competitors.py --max-peers 10 --min-peer-price-rows 5`
-- `.\.venv\Scripts\python.exe scripts\run_hedonic.py --max-peers 10 --min-token-frequency 25`
-- `.\.venv\Scripts\python.exe scripts\run_competitors.py --spec-path data\modelling\client_spec_example.json --lead-time-days 30 --stay-length-days 4 --season peak --max-peers 10 --min-peer-price-rows 5`
-
-Spec example validation:
-
-- The 30-day peak, 4-night example returned 4 peer price rows across 2 priced
-  peer properties.
-- Peer median: EUR 209.38/night.
-- Example client reference price: EUR 180.00/night.
-- Example percentile vs peers: 25.0%.
-- Gap to peer median: EUR -29.38, about -14.0%.
+- `.\.venv\Scripts\python.exe -m unittest discover -s tests`: 228 tests OK.
 
 ## Next Recommended Step
 
-The core roadmap and first hardening pass are implemented. Remaining suggested
-next steps are productization choices:
+The core roadmap, the first hardening pass, and all three deliverable formats
+(workbook export, local dashboard, and positioning narrative) are implemented.
+Remaining suggested next steps:
 
-- Decide the next deliverable format: static markdown report refinement,
-  spreadsheet export, or a small dashboard.
-- If staying with markdown, refine `competitor_report.md` and
-  `hedonic_report.md` into a client-facing narrative rather than raw technical
-  outputs.
-- If choosing spreadsheet export, add an `.xlsx` writer with summary, peer set,
-  raw peer rows, adjusted peer rows, and gap decomposition tabs.
-- If choosing a dashboard, build a small local app over the committed Parquet and
-  current analysis helpers.
-- Consider a future varied-occupancy scrape for large villas, because current
-  villa prices are still 2-guest offers and under-serve whole-villa pricing.
-- Consider recurring scrape cadence only if the goal shifts from competitive
-  positioning to demand-aware price optimization.
+- **Dashboard polish (optional).** Possible follow-ups: hand-entered spec input
+  in the UI (the helpers already support spec clients), CSV/workbook download
+  buttons from the running app, a checkin-date selector alongside lead
+  time/stay/season, or surfacing the positioning narrative text in the UI.
+- **Varied-occupancy villa scrape.** Current villa prices are still 2-guest
+  offers, so large-party villa pricing is under-served. Returns to ingestion.
+- **Recurring scrape cadence.** Only worth it if the goal shifts from
+  competitive positioning to demand-aware price optimization.
 
 ## Scraper Current Status
 
@@ -310,7 +387,8 @@ High-level modules:
 - `tourism_pricing_analytics/features/`: Layer 2 browser-free modelling-table
   feature build.
 - `tourism_pricing_analytics/analysis/`: downstream loader, segmentation, EDA,
-  comparable benchmark logic, and hedonic adjustment logic.
+  comparable benchmark logic, hedonic adjustment logic, dashboard helpers, and
+  the positioning narrative renderer.
 - `scripts/export_modelling_table.py`: durable Parquet export.
 - `scripts/summarize_modelling_table.py`: deterministic EDA summary.
 - `scripts/run_comparable_benchmark.py`: deterministic JSON comparable benchmark
@@ -319,6 +397,11 @@ High-level modules:
   runner for URL or hand-entered spec clients.
 - `scripts/run_hedonic.py`: roadmap Phase 3 markdown/JSON hedonic adjustment
   report runner.
+- `scripts/run_positioning_narrative.py`: client-facing plain-language
+  positioning narrative runner.
+- `scripts/export_pricing_workbook.py`: client-facing `.xlsx` workbook export.
+- `scripts/run_dashboard.py`: zero-dependency local `http.server` dashboard over
+  the modelling table and analysis helpers.
 - `scripts/run_full_scrape.py`: sharded full scrape entrypoint.
 
 ## Known Issues And Interpretation Limits
@@ -343,6 +426,9 @@ High-level modules:
   star/class rating or check-in/out time fields.
 - **OLS collinearity.** The OLS model has a high condition number. Treat its
   coefficients as descriptive premia, not causal estimates.
+- **Dashboard is local-only.** `scripts/run_dashboard.py` binds to localhost and
+  has no auth; it is a single-user analyst tool, not a hosted service. The
+  one-time hedonic fit at startup costs a few seconds before it serves.
 - **Generated scrape outputs remain local.** Treat `saved_dom/runs/` as
   generated data. Promote only small representative HTML files to
   `data/sample/raw_html/`.
@@ -353,14 +439,15 @@ High-level modules:
 
 Latest relevant commits:
 
+- `c729bf4 Add client-facing positioning narrative report`
+- `82f6b90 Add local competitive pricing dashboard`
+- `dad29b4 Add competitive pricing workbook export`
+- `d3e2eef Update session notes after hardening pass`
 - `7eada1b Harden analytics reports and property type parsing`
 - `26ee7fb Add hedonic price adjustment analysis`
 - `f14e430 Complete comparable benchmark contract`
-- `d803b7a Update session notes for comparables roadmap`
 - `4e121e7 Add pricing analytics roadmap`
 - `12125ed Add comparable benchmark analysis`
-- `8914f34 Refresh session notes for analysis phases`
 - `b579e36 Add analysis foundation`
-- `d9b5feb Add durable modelling table export`
 
 As of this refresh, `session_notes.md` is intentionally updated by request.
