@@ -1,8 +1,18 @@
 {
   "seed": 10001,
   "output_root": "saved_dom",
-  "lead_times": [1, 7, 14, 30, 60],
-  "stay_lengths": [4, 7, 14],
+  "lead_times": [
+    1,
+    7,
+    14,
+    30,
+    60
+  ],
+  "stay_lengths": [
+    4,
+    7,
+    14
+  ],
   "browser": {
     "headless": false,
     "slow_mo_ms": 75,
@@ -115,6 +125,406 @@
     {
       "name": "Casa Delfino Hotel & Spa",
       "url": "https://www.booking.com/hotel/gr/casa-delfino-old-harbour.en-gb.html"
+    },
+    {
+      "name": "Anemomilos Studios",
+      "url": "https://www.booking.com/hotel/gr/anemomilos-studios.en-gb.html"
+    },
+    {
+      "name": "Hotel Caretta Beach",
+      "url": "https://www.booking.com/hotel/gr/caretta-beach.en-gb.html"
+    },
+    {
+      "name": "Christiana Apartments",
+      "url": "https://www.booking.com/hotel/gr/christiana-apartments.en-gb.html"
+    },
+    {
+      "name": "Electra Studios",
+      "url": "https://www.booking.com/hotel/gr/electra-studios-gerani-chanion.en-gb.html"
+    },
+    {
+      "name": "Elena Rooms & Apartments",
+      "url": "https://www.booking.com/hotel/gr/elena-rooms-apartments-gerani.en-gb.html"
+    },
+    {
+      "name": "Hippokratis Apartments",
+      "url": "https://www.booking.com/hotel/gr/hippokratis-apartments.en-gb.html"
+    },
+    {
+      "name": "Aris Apartments",
+      "url": "https://www.booking.com/hotel/gr/villa-arhontariki-1-2-apartments-aris.en-gb.html"
+    },
+    {
+      "name": "Androulakis Apartments",
+      "url": "https://www.booking.com/hotel/gr/androulakis-apts.en-gb.html"
+    },
+    {
+      "name": "Kostakis Beach",
+      "url": "https://www.booking.com/hotel/gr/kostakis-beach.en-gb.html"
+    },
+    {
+      "name": "Gerona Mare Apartments",
+      "url": "https://www.booking.com/hotel/gr/gerona-mare-apartments.en-gb.html"
+    },
+    {
+      "name": "Andy's Gardens",
+      "url": "https://www.booking.com/hotel/gr/andys-garden.en-gb.html"
+    },
+    {
+      "name": "Calmaliving Seaside apartments with pool",
+      "url": "https://www.booking.com/hotel/gr/calmaliving-chania.en-gb.html"
+    },
+    {
+      "name": "Delta Beach",
+      "url": "https://www.booking.com/hotel/gr/delta-studios.en-gb.html"
+    },
+    {
+      "name": "Studios Kydonia",
+      "url": "https://www.booking.com/hotel/gr/studios-kydonia.en-gb.html"
+    },
+    {
+      "name": "Baladinos Apartments",
+      "url": "https://www.booking.com/hotel/gr/baladinos-apartments.en-gb.html"
+    },
+    {
+      "name": "Passatempo Casa - 3 bedroom apartment close to the swimming pool",
+      "url": "https://www.booking.com/hotel/gr/passatempo-casa.en-gb.html"
+    },
+    {
+      "name": "Villa Fleria Seaside Studios & Apts",
+      "url": "https://www.booking.com/hotel/gr/villa-fleria-seaside-studios-amp-apts.en-gb.html"
+    },
+    {
+      "name": "Mini Art Apartments",
+      "url": "https://www.booking.com/hotel/gr/mini-art-apartment.en-gb.html"
+    },
+    {
+      "name": "Welcome U",
+      "url": "https://www.booking.com/hotel/gr/welcome-u.en-gb.html"
+    },
+    {
+      "name": "Villa AnnaNiko, Luxury Villa, 2 Heated Pools, Jacuzzi, Gym, Stunning Views, Green Energy",
+      "url": "https://www.booking.com/hotel/gr/annaniko-villa-amazing-views-spacious-pools.en-gb.html"
+    },
+    {
+      "name": "Wooden Beach House",
+      "url": "https://www.booking.com/hotel/gr/wooden-beach-house.en-gb.html"
+    },
+    {
+      "name": "Pardalakis Studios",
+      "url": "https://www.booking.com/hotel/gr/pardalakis-studios.en-gb.html"
+    },
+    {
+      "name": "Matzi Hotel Apartments",
+      "url": "https://www.booking.com/hotel/gr/matzi-appartments-2.en-gb.html"
+    },
+    {
+      "name": "VILLA BLUE VEDERE",
+      "url": "https://www.booking.com/hotel/gr/villa-blue-vedere.en-gb.html"
+    },
+    {
+      "name": "Marika Beach Hotel",
+      "url": "https://www.booking.com/hotel/gr/marika.en-gb.html"
+    },
+    {
+      "name": "Linda Apartments Platanias",
+      "url": "https://www.booking.com/hotel/gr/linda-apartments-platanias.en-gb.html"
+    },
+    {
+      "name": "Stellar Apartments I",
+      "url": "https://www.booking.com/hotel/gr/stellar-i.en-gb.html"
+    },
+    {
+      "name": "Ilias Apartments",
+      "url": "https://www.booking.com/hotel/gr/ilias-apartments-platanias.en-gb.html"
+    },
+    {
+      "name": "Kallitsakis Beach",
+      "url": "https://www.booking.com/hotel/gr/kallitsakis-beach.en-gb.html"
+    },
+    {
+      "name": "John Apartments",
+      "url": "https://www.booking.com/hotel/gr/john-apartments.en-gb.html"
+    },
+    {
+      "name": "Amaryllis",
+      "url": "https://www.booking.com/hotel/gr/amaryllis-platania-s.en-gb.html"
+    },
+    {
+      "name": "Vasiliki Apartments",
+      "url": "https://www.booking.com/hotel/gr/vasiliki-apartments-platanias-chania.en-gb.html"
+    },
+    {
+      "name": "Twins Apartments",
+      "url": "https://www.booking.com/hotel/gr/twins-apartments.en-gb.html"
+    },
+    {
+      "name": "Porto Platanias Village Resort",
+      "url": "https://www.booking.com/hotel/gr/porto-platanias-village-resort.en-gb.html"
+    },
+    {
+      "name": "Villa Eleni Seaside Apartments-40 meters from Beach",
+      "url": "https://www.booking.com/hotel/gr/aparthotel-villa-eleni-platanias-20m-to-the-sea.en-gb.html"
+    },
+    {
+      "name": "Lavender Suite with Sea View - Beach at your Doorstep",
+      "url": "https://www.booking.com/hotel/gr/levanter-suite-sea-view.en-gb.html"
+    },
+    {
+      "name": "Charisma Apartment",
+      "url": "https://www.booking.com/hotel/gr/charisma.en-gb.html"
+    },
+    {
+      "name": "Artemis Rooms - Beach at Your Doorstep",
+      "url": "https://www.booking.com/hotel/gr/artemis-apartments-chania1.en-gb.html"
+    },
+    {
+      "name": "Alkionides Seaside Hotel",
+      "url": "https://www.booking.com/hotel/gr/alkionides-platanias.en-gb.html"
+    },
+    {
+      "name": "Miramare Boutique Apartments",
+      "url": "https://www.booking.com/hotel/gr/bayview-apartments.en-gb.html"
+    },
+    {
+      "name": "Lola's Hotel",
+      "url": "https://www.booking.com/hotel/gr/lolas.en-gb.html"
+    },
+    {
+      "name": "VAMA APARTMENT",
+      "url": "https://www.booking.com/hotel/gr/vama-apartment.en-gb.html"
+    },
+    {
+      "name": "Gelina Apartments",
+      "url": "https://www.booking.com/hotel/gr/gelina-apartments.en-gb.html"
+    },
+    {
+      "name": "Stellar Apartments II",
+      "url": "https://www.booking.com/hotel/gr/stellar-apartments-ii-khania-pole.en-gb.html"
+    },
+    {
+      "name": "Ariadne Beach",
+      "url": "https://www.booking.com/hotel/gr/ariadne-beach-kolios.en-gb.html"
+    },
+    {
+      "name": "Platanias Aetheras Beach",
+      "url": "https://www.booking.com/hotel/gr/aetheras-beach.en-gb.html"
+    },
+    {
+      "name": "Maria Suites",
+      "url": "https://www.booking.com/hotel/gr/maria-suites-platanias.en-gb.html"
+    },
+    {
+      "name": "Maleme Kefi",
+      "url": "https://www.booking.com/hotel/gr/maleme-kefi-platanias.en-gb.html"
+    },
+    {
+      "name": "Bay View Apartments",
+      "url": "https://www.booking.com/hotel/gr/bay-view.en-gb.html"
+    },
+    {
+      "name": "Mythos Beach Hotel Apartments",
+      "url": "https://www.booking.com/hotel/gr/mythos-beach.en-gb.html"
+    },
+    {
+      "name": "Konaki Apartments",
+      "url": "https://www.booking.com/hotel/gr/konaki-apartments.en-gb.html"
+    },
+    {
+      "name": "Ledra Maleme Hotel",
+      "url": "https://www.booking.com/hotel/gr/ledra-maleme.en-gb.html"
+    },
+    {
+      "name": "Wave rooms",
+      "url": "https://www.booking.com/hotel/gr/wave-chania.en-gb.html"
+    },
+    {
+      "name": "Solon Apartments Near Beach",
+      "url": "https://www.booking.com/hotel/gr/solon-apartments.en-gb.html"
+    },
+    {
+      "name": "Oliva Beach Hotel",
+      "url": "https://www.booking.com/hotel/gr/katrin-beach.en-gb.html"
+    },
+    {
+      "name": "Villa Kudos",
+      "url": "https://www.booking.com/hotel/gr/villa-kudos.en-gb.html"
+    },
+    {
+      "name": "Casa Constans",
+      "url": "https://www.booking.com/hotel/gr/casa-constans-khania.en-gb.html"
+    },
+    {
+      "name": "Aegean Breeze Luxury Apartments next to the sea",
+      "url": "https://www.booking.com/hotel/gr/aegean-breeze-apartments.en-gb.html"
+    },
+    {
+      "name": "Alexandros M",
+      "url": "https://www.booking.com/hotel/gr/alexandros-m.en-gb.html"
+    },
+    {
+      "name": "Villa Palma",
+      "url": "https://www.booking.com/hotel/gr/villa-palma.en-gb.html"
+    },
+    {
+      "name": "Villa Pandora - Petit Bonheur",
+      "url": "https://www.booking.com/hotel/gr/lucky-guest-villa-pandora-maleme-platanias.en-gb.html"
+    },
+    {
+      "name": "Villa Avly",
+      "url": "https://www.booking.com/hotel/gr/villa-avly.en-gb.html"
+    },
+    {
+      "name": "Van Gogh & Monet apartments",
+      "url": "https://www.booking.com/hotel/gr/van-gogh-amp-monet-apartments.en-gb.html"
+    },
+    {
+      "name": "Cocoon Luxury Villas",
+      "url": "https://www.booking.com/hotel/gr/luxury-villa-cocoon.en-gb.html"
+    },
+    {
+      "name": "Daphnis Villas",
+      "url": "https://www.booking.com/hotel/gr/daphnis-villas.en-gb.html"
+    },
+    {
+      "name": "Futura Hotel",
+      "url": "https://www.booking.com/hotel/gr/futurahotel.en-gb.html"
+    },
+    {
+      "name": "Noir Residence - Chic 2Br House Near Maleme Beach",
+      "url": "https://www.booking.com/hotel/gr/noir-residence-modern-chic-house-near-the-beach.en-gb.html"
+    },
+    {
+      "name": "Villa Bamboo",
+      "url": "https://www.booking.com/hotel/gr/villa-bamboo.en-gb.html"
+    },
+    {
+      "name": "Maleme Maisonette",
+      "url": "https://www.booking.com/hotel/gr/maleme-maisonette.en-gb.html"
+    },
+    {
+      "name": "Iason Villas – Chania, Crete",
+      "url": "https://www.booking.com/hotel/gr/villa-iason.en-gb.html"
+    },
+    {
+      "name": "Villa Per Mare",
+      "url": "https://www.booking.com/hotel/gr/villa-per-mare.en-gb.html"
+    },
+    {
+      "name": "house in the village near the sea",
+      "url": "https://www.booking.com/hotel/gr/house-in-the-village-near-the-sea.en-gb.html"
+    },
+    {
+      "name": "Esperado Gardens Maleme",
+      "url": "https://www.booking.com/hotel/gr/esperado-gardens-maleme.en-gb.html"
+    },
+    {
+      "name": "Gemini Villas - Villa Calma & Siesta",
+      "url": "https://www.booking.com/hotel/gr/gemini-villas-calma-amp-siesta.en-gb.html"
+    },
+    {
+      "name": "Eva Suites & Apartments",
+      "url": "https://www.booking.com/hotel/gr/eva-khania.en-gb.html"
+    },
+    {
+      "name": "Rhoe Seaside Apartments",
+      "url": "https://www.booking.com/hotel/gr/manos-apartments-khania.en-gb.html"
+    },
+    {
+      "name": "Abella Hotel",
+      "url": "https://www.booking.com/hotel/gr/abella-khania-pole.en-gb.html"
+    },
+    {
+      "name": "Nicolas Studios & Apartments",
+      "url": "https://www.booking.com/hotel/gr/nicolas-studios-chania.en-gb.html"
+    },
+    {
+      "name": "Raisakis Apartments",
+      "url": "https://www.booking.com/hotel/gr/raisakis.en-gb.html"
+    },
+    {
+      "name": "Angelica Studios and Apartments",
+      "url": "https://www.booking.com/hotel/gr/angelica-studios-and-apartments.en-gb.html"
+    },
+    {
+      "name": "Sun Ray Luxury Apartments",
+      "url": "https://www.booking.com/hotel/gr/sun-ray-luxury-room-101.en-gb.html"
+    },
+    {
+      "name": "Ekavi Apartments",
+      "url": "https://www.booking.com/hotel/gr/ekavi-apartment.en-gb.html"
+    },
+    {
+      "name": "Erofili",
+      "url": "https://www.booking.com/hotel/gr/erofili-khania.en-gb.html"
+    },
+    {
+      "name": "Despina Studios",
+      "url": "https://www.booking.com/hotel/gr/despina-studios-agia-marina.en-gb.html"
+    },
+    {
+      "name": "El Greco Studios",
+      "url": "https://www.booking.com/hotel/gr/el-greco-studios-agia-marina-nea-kydonias.en-gb.html"
+    },
+    {
+      "name": "Anna Αpartments II",
+      "url": "https://www.booking.com/hotel/gr/anna-apartments-ii.en-gb.html"
+    },
+    {
+      "name": "Villa Aretousa 2",
+      "url": "https://www.booking.com/hotel/gr/villa-aretousa-2.en-gb.html"
+    },
+    {
+      "name": "Orion Star",
+      "url": "https://www.booking.com/hotel/gr/orion-maisonettes.en-gb.html"
+    },
+    {
+      "name": "Litinakis Studios Sea View & Litinakis Studios Garden View 700 meters away",
+      "url": "https://www.booking.com/hotel/gr/litinakis-studios-agia-marina-chania.en-gb.html"
+    },
+    {
+      "name": "Rubini Homes",
+      "url": "https://www.booking.com/hotel/gr/roumpini-villas.en-gb.html"
+    },
+    {
+      "name": "Like Home",
+      "url": "https://www.booking.com/hotel/gr/like-home-agia-marina.en-gb.html"
+    },
+    {
+      "name": "Elysian Luxury Suites in Chania",
+      "url": "https://www.booking.com/hotel/gr/elysian-luxury-suites-in-chania.en-gb.html"
+    },
+    {
+      "name": "Queen Mary Beachfront Studios",
+      "url": "https://www.booking.com/hotel/gr/queen-mary.en-gb.html"
+    },
+    {
+      "name": "Villa Aretousa 1",
+      "url": "https://www.booking.com/hotel/gr/villa-aretousa-1.en-gb.html"
+    },
+    {
+      "name": "Romeos Studios",
+      "url": "https://www.booking.com/hotel/gr/elsa-studios.en-gb.html"
+    },
+    {
+      "name": "Dias Hotel Apartments",
+      "url": "https://www.booking.com/hotel/gr/dias-apartments-agia-marina-neas-kydonias.en-gb.html"
+    },
+    {
+      "name": "Manolia Dream Apartment 3-bedrooms 30m to the beach",
+      "url": "https://www.booking.com/hotel/gr/magnolia-apartments-agia-marina.en-gb.html"
+    },
+    {
+      "name": "Lavender Villas Chania",
+      "url": "https://www.booking.com/hotel/gr/lavender-villas-chania.en-gb.html"
+    },
+    {
+      "name": "Eden Beach Hotel",
+      "url": "https://www.booking.com/hotel/gr/eden-agia-marina-nea-kydonias.en-gb.html"
+    },
+    {
+      "name": "Molos Apartments",
+      "url": "https://www.booking.com/hotel/gr/molos-apartments.en-gb.html"
     }
   ]
 }
