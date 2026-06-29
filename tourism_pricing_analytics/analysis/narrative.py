@@ -132,8 +132,8 @@ def _bottom_line(
             "or an over-pricing risk to watch."
         ),
         "mixed_premium": (
-            "Stronger features justify much of the gap, leaving a modest premium over a "
-            "like-for-like rival that reflects pricing power or a little over-pricing risk."
+            "After crediting measurable features, a modest premium remains over a "
+            "like-for-like rival, reflecting pricing power or a little over-pricing risk."
         ),
         "fair": (
             "Once features are accounted for, you are priced fairly against a "
@@ -265,9 +265,9 @@ def _recommendation_lines(*, name: str, position_class: str) -> list[str]:
             "lever to test.",
         ],
         "mixed_premium": [
-            f"{name} carries a premium that is mostly earned by stronger features, with "
-            "a modest unexplained margin on top. The position looks broadly defensible; "
-            "revisit the top end if occupancy softens.",
+            f"{name} carries a modest unexplained premium after measurable features are "
+            "credited. The position looks broadly defensible, but revisit the top end "
+            "if occupancy softens.",
         ],
         "underpriced": [
             f"{name} appears to be leaving money on the table: feature-matched rivals "
@@ -363,7 +363,7 @@ def render_positioning_narrative(payload: dict[str, Any]) -> str:
         "- The feature adjustment comes from a gradient-boosted hedonic model "
         f"(grouped cross-validated log R-squared about {_fmt_pct((_num(metrics.get('r2_log_mean')) or 0) * 100)}, "
         f"typical error about {_fmt_money(metrics.get('mae_eur_mean'))} per night). Treat it as a "
-        "well-informed adjustment, not an exact valuation.",
+        "directional adjustment, not an exact valuation.",
         f"- Source table: `{payload.get('source_table', 'n/a')}`",
         "",
     ]

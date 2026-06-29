@@ -14,7 +14,7 @@ class MarkdownReportOutputTests(unittest.TestCase):
         required_fragments = [
             "# Comparable Competitor Benchmark",
             "## Client",
-            "- Property: Anna's House",
+            "- Property: Stavros Villas & Apartments",
             "## Benchmark Windows",
             "## Peer Price Position",
             "- Peer rows:",
@@ -35,7 +35,7 @@ class MarkdownReportOutputTests(unittest.TestCase):
             "## Training Summary",
             "## OLS Market Premia",
             "## Feature-Adjusted Comparable Benchmark",
-            "- Client: Anna's House",
+            "- Client: Stavros Villas & Apartments",
             "- Raw peer median:",
             "- Feature-adjusted peer median:",
             "- Feature-adjusted IQR:",
@@ -52,7 +52,7 @@ class MarkdownReportOutputTests(unittest.TestCase):
         report = (MODELLING_DIR / "positioning_narrative.md").read_text(encoding="utf-8")
 
         required_fragments = [
-            "# Competitive Pricing Position: Anna's House",
+            "# Competitive Pricing Position: Stavros Villas & Apartments",
             "## Bottom line",
             "## Who you are compared against",
             "## Your price position today",

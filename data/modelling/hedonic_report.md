@@ -6,45 +6,45 @@ Price unit: EUR/night for a 2-guest Booking.com search. The model explains liste
 
 ## Training Summary
 
-- Rows: 1583
-- Properties: 154
+- Rows: 1256
+- Properties: 67
 - Grouped CV folds: 5
-- GBM mean log R2: 0.311
-- GBM mean log MAE: 0.285
-- GBM mean EUR/night MAE: EUR 53.32
-- OLS R2: 0.625
-- OLS condition number: 94480971881049424.0
+- GBM mean log R2: -1.628
+- GBM mean log MAE: 0.383
+- GBM mean EUR/night MAE: EUR 83.31
+- OLS R2: 0.867
+- OLS condition number: 11247963270357698.0
 
 ## OLS Market Premia
 
 | Feature | Coefficient | Robust SE | p-value |
 | --- | ---: | ---: | ---: |
-| subscore_value_for_money | -0.5163 | 0.0354 | 0.0000 |
-| subscore_facilities | 0.2757 | 0.0699 | 0.0001 |
-| property_type__villa | 0.1943 | 0.0626 | 0.0019 |
-| subscore_staff | 0.1939 | 0.0359 | 0.0000 |
-| subscore_host | 0.1673 | 0.0579 | 0.0038 |
-| property_type__holiday_home | 0.1664 | 0.0503 | 0.0009 |
-| meal_plan_ordinal | 0.1528 | 0.0214 | 0.0000 |
-| star_rating | 0.1293 | 0.0280 | 0.0000 |
-| star_rating_missing | -0.1179 | 0.0465 | 0.0112 |
-| bed_count_missing | 0.1018 | 0.0330 | 0.0020 |
-| subscore_comfort | 0.0936 | 0.0631 | 0.1377 |
-| checkin_month | 0.0897 | 0.0930 | 0.3347 |
+| subscore_staff_missing | 2.4220 | 0.4760 | 0.0000 |
+| subscore_host_missing | 2.3030 | 0.3819 | 0.0000 |
+| property_type__holiday_home | -0.7808 | 0.3741 | 0.0369 |
+| review_score | -0.5630 | 0.1710 | 0.0010 |
+| subscore_facilities | 0.4636 | 0.0955 | 0.0000 |
+| review_count_missing | -0.4600 | 0.0600 | 0.0000 |
+| subscore_cleanliness_missing | -0.4600 | 0.0600 | 0.0000 |
+| subscore_location_missing | -0.4600 | 0.0600 | 0.0000 |
+| subscore_facilities_missing | -0.4600 | 0.0600 | 0.0000 |
+| subscore_value_for_money_missing | -0.4600 | 0.0600 | 0.0000 |
+| subscore_comfort_missing | -0.4600 | 0.0600 | 0.0000 |
+| review_score_missing | -0.4600 | 0.0600 | 0.0000 |
 
 ## Feature-Adjusted Comparable Benchmark
 
-- Client: Anna's House
-- Raw peer median: EUR 159.00
-- Feature-adjusted peer median: EUR 237.70
-- Feature-adjusted IQR: EUR 213.50 to EUR 259.13
-- Adjusted peer rows: 75
+- Client: Stavros Villas & Apartments
+- Raw peer median: EUR 119.00
+- Feature-adjusted peer median: EUR 120.35
+- Feature-adjusted IQR: EUR 114.14 to EUR 129.56
+- Adjusted peer rows: 109
 
 ## Price Gap Decomposition
 
-- Client observed price: EUR 141.71
-- Competitor observed price: EUR 82.50
-- Observed gap: EUR 59.21
-- Feature-explained gap: EUR 86.05
-- Residual gap: EUR -26.84
+- Client observed price: EUR 117.86
+- Competitor observed price: EUR 57.00
+- Observed gap: EUR 60.86
+- Feature-explained gap: EUR 59.98
+- Residual gap: EUR 0.88
 

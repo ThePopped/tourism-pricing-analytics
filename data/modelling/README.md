@@ -3,10 +3,11 @@
 `modelling_table.parquet` is the durable downstream analytics input built from
 the completed Booking.com scrape run:
 
-- Source run: `saved_dom/runs/20260623_222416_346202`
-- Export command: `.\.venv\Scripts\python.exe scripts\export_modelling_table.py`
-- Export date: 2026-06-25
-- Shape: 5,331 rows x 53 columns
+- Source run: `saved_dom/runs/20260629_180820_565010`
+- Export command:
+  `.\.venv\Scripts\python.exe scripts\export_modelling_table.py --run-dir saved_dom\runs\20260629_180820_565010`
+- Export date: 2026-06-29
+- Shape: 1,653 rows x 53 columns
 - Grain: one row per available Booking.com rate offer
 - Price unit: EUR/night for 2 guests, computed as
   `current_price_value / stay_length_days`
@@ -18,7 +19,9 @@ the full scrape artifacts.
 `competitive_pricing_workbook.xlsx` is a client-facing export built from the
 same table, comparable benchmark, and hedonic adjustment helpers:
 
-- Export command: `.\.venv\Scripts\python.exe scripts\export_pricing_workbook.py`
+- Client subject: Stavros Villas & Apartments
+- Export command:
+  `.\.venv\Scripts\python.exe scripts\export_pricing_workbook.py --subject-url https://www.booking.com/hotel/gr/stavros-villas-amp-apartments.en-gb.html`
 - Sheets: summary, benchmark windows, peer set, raw peer rows, adjusted peer
   rows, and gap decomposition
 
@@ -26,7 +29,9 @@ same table, comparable benchmark, and hedonic adjustment helpers:
 turns the raw figures in `competitor_report.md` and `hedonic_report.md` into
 plain-language prose for a non-technical operator:
 
-- Run command: `.\.venv\Scripts\python.exe scripts\run_positioning_narrative.py`
+- Client subject: Stavros Villas & Apartments
+- Run command:
+  `.\.venv\Scripts\python.exe scripts\run_positioning_narrative.py --subject-url https://www.booking.com/hotel/gr/stavros-villas-amp-apartments.en-gb.html`
 - Reuses the same hedonic report payload as the workbook and dashboard, then
   renders a bottom line, peer set, price position, a feature-justified vs
   unexplained premium split, a recommendation, and interpretation caveats.

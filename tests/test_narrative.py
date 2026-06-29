@@ -90,6 +90,36 @@ class PositioningNarrativeTests(unittest.TestCase):
         self.assertIn("EUR 78.70", report)
         self.assertIn("EUR 69.03", report)
 
+    def test_mixed_premium_does_not_claim_gap_is_mostly_earned(self) -> None:
+        benchmark = _payload()["benchmark"]
+        benchmark["client"]["property_name"] = "Stavros Villas & Apartments"
+        benchmark["peer_price_distribution"] = {
+            "count": 109,
+            "p25": 95.25,
+            "median": 119.0,
+            "p75": 162.25,
+        }
+        benchmark["subject_price_distribution"] = {"count": 12, "median": 133.48}
+        benchmark["subject_percentile_vs_peers"] = 57.8
+        benchmark["price_gap_to_peer_median"] = 14.48
+        benchmark["price_gap_to_peer_median_pct"] = 0.122
+        report = render_positioning_narrative(
+            _payload(
+                benchmark=benchmark,
+                adjusted_peer_price_distribution={
+                    "count": 109,
+                    "p25": 114.14,
+                    "median": 120.35,
+                    "p75": 129.56,
+                },
+            )
+        )
+
+        self.assertIn("EUR 1.35", report)
+        self.assertIn("EUR 13.13", report)
+        self.assertIn("modest unexplained premium", report)
+        self.assertNotIn("mostly earned", report)
+
     def test_underpriced_subject_recommends_increase(self) -> None:
         benchmark = _payload()["benchmark"]
         benchmark["subject_price_distribution"] = {"count": 6, "median": 150.0}
