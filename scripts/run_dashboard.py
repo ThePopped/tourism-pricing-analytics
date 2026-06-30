@@ -39,7 +39,11 @@ from tourism_pricing_analytics.analysis.dashboard import (
     window_options,
 )
 from tourism_pricing_analytics.analysis.hedonic import fit_hedonic_models
-from tourism_pricing_analytics.analysis.loader import DEFAULT_MODELLING_TABLE, load_modelling_table
+from tourism_pricing_analytics.analysis.loader import (
+    DEFAULT_HEDONIC_TRAINING_TABLE,
+    DEFAULT_MODELLING_TABLE,
+    load_modelling_table,
+)
 
 
 class DashboardService:
@@ -50,11 +54,17 @@ class DashboardService:
         frame: pd.DataFrame,
         *,
         source_table: str,
+        training_frame: pd.DataFrame | None = None,
+        training_source_table: str | None = None,
         min_token_frequency: int = 25,
     ) -> None:
         self.frame = frame
         self.source_table = source_table
-        self.bundle = fit_hedonic_models(frame, min_token_frequency=min_token_frequency)
+        self.training_source_table = training_source_table or source_table
+        self.bundle = fit_hedonic_models(
+            training_frame if training_frame is not None else frame,
+            min_token_frequency=min_token_frequency,
+        )
         self.catalog = subject_catalog(frame)
         self.windows = window_options(frame)
         self._default_subject_url = self.catalog[0]["property_url"] if self.catalog else None
@@ -64,6 +74,7 @@ class DashboardService:
             "subjects": self.catalog,
             "windows": self.windows,
             "source_table": self.source_table,
+            "training_source_table": self.training_source_table,
             "default_subject_url": self._default_subject_url,
         }
 
@@ -98,6 +109,7 @@ class DashboardService:
             max_peers=max_peers,
             max_distance_km=max_distance_km,
             bundle=self.bundle,
+            training_source_table=self.training_source_table,
         )
         return shape_dashboard_payload(report_payload)
 
@@ -165,6 +177,12 @@ def _make_handler(service: DashboardService) -> type[BaseHTTPRequestHandler]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--path", type=Path, default=DEFAULT_MODELLING_TABLE)
+    parser.add_argument(
+        "--training-path",
+        type=Path,
+        default=DEFAULT_HEDONIC_TRAINING_TABLE,
+        help="Broader table for hedonic model training.",
+    )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--min-token-frequency", type=int, default=25)
@@ -173,10 +191,14 @@ def main() -> None:
 
     print(f"Loading modelling table from {args.path} ...")
     frame = load_modelling_table(args.path)
+    print(f"Loading hedonic training table from {args.training_path} ...")
+    training_frame = load_modelling_table(args.training_path)
     print("Fitting hedonic model (one-time startup cost) ...")
     service = DashboardService(
         frame,
         source_table=str(args.path),
+        training_frame=training_frame,
+        training_source_table=str(args.training_path),
         min_token_frequency=args.min_token_frequency,
     )
     print(

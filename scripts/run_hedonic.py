@@ -24,7 +24,11 @@ from tourism_pricing_analytics.analysis.hedonic import (
     feature_adjusted_peer_prices,
     fit_hedonic_models,
 )
-from tourism_pricing_analytics.analysis.loader import DEFAULT_MODELLING_TABLE, load_modelling_table
+from tourism_pricing_analytics.analysis.loader import (
+    DEFAULT_HEDONIC_TRAINING_TABLE,
+    DEFAULT_MODELLING_TABLE,
+    load_modelling_table,
+)
 from tourism_pricing_analytics.analysis.segment import segment_self_catering
 
 DEFAULT_REPORT_PATH = REPO_ROOT / "data" / "modelling" / "hedonic_report.md"
@@ -211,7 +215,8 @@ def render_markdown_report(payload: dict[str, Any]) -> str:
     lines = [
         "# Hedonic Price Adjustment",
         "",
-        f"Source table: `{payload['source_table']}`",
+        f"Comparable source table: `{payload['source_table']}`",
+        f"Hedonic training table: `{payload['training_source_table']}`",
         "",
         "Price unit: EUR/night for a 2-guest Booking.com search. The model explains listed asking prices for available offers, not transacted demand.",
         "",
@@ -273,9 +278,14 @@ def build_report_payload(
     max_distance_km: float = ComparableBenchmarkConfig.max_distance_km,
     min_token_frequency: int = 25,
     bundle: HedonicModelBundle | None = None,
+    training_frame: pd.DataFrame | None = None,
+    training_source_table: str | None = None,
 ) -> dict[str, Any]:
     if bundle is None:
-        bundle = fit_hedonic_models(frame, min_token_frequency=min_token_frequency)
+        bundle = fit_hedonic_models(
+            training_frame if training_frame is not None else frame,
+            min_token_frequency=min_token_frequency,
+        )
     benchmark = peer_price_benchmark(
         client,
         frame,
@@ -310,6 +320,7 @@ def build_report_payload(
 
     return {
         "source_table": source_table,
+        "training_source_table": training_source_table or source_table,
         "training_rows": bundle.training_rows,
         "training_properties": bundle.training_properties,
         "cv_metrics": bundle.cv_metrics,
@@ -326,6 +337,12 @@ def build_report_payload(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--path", type=Path, default=DEFAULT_MODELLING_TABLE)
+    parser.add_argument(
+        "--training-path",
+        type=Path,
+        default=DEFAULT_HEDONIC_TRAINING_TABLE,
+        help="Broader table for hedonic model training. Defaults to the committed broad training table.",
+    )
     parser.add_argument("--subject-url", default=None)
     parser.add_argument("--spec-json", default=None)
     parser.add_argument("--spec-path", type=Path, default=None)
@@ -338,6 +355,7 @@ def main() -> None:
     args = parser.parse_args()
 
     frame = load_modelling_table(args.path)
+    training_frame = load_modelling_table(args.training_path)
     spec = _load_spec(args)
     if spec is not None and args.subject_url:
         raise SystemExit("Use either --subject-url or a spec, not both.")
@@ -350,6 +368,8 @@ def main() -> None:
         max_peers=args.max_peers,
         max_distance_km=args.max_distance_km,
         min_token_frequency=args.min_token_frequency,
+        training_frame=training_frame,
+        training_source_table=str(args.training_path),
     )
     report = render_markdown_report(payload)
     args.out.parent.mkdir(parents=True, exist_ok=True)

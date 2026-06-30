@@ -12,6 +12,7 @@ import pandas as pd
 from config import DATA_DIR
 
 DEFAULT_MODELLING_TABLE = DATA_DIR / "modelling" / "modelling_table.parquet"
+DEFAULT_HEDONIC_TRAINING_TABLE = DATA_DIR / "modelling" / "hedonic_training_table.parquet"
 
 JSON_ENCODED_COLUMNS = (
     "quantity_options",

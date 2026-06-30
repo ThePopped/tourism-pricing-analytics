@@ -185,6 +185,58 @@ class HedonicModelTests(unittest.TestCase):
         self.assertIn("Feature-Adjusted Comparable Benchmark", report)
         self.assertIn("Price Gap Decomposition", report)
 
+    def test_report_can_train_on_broader_frame_than_peer_benchmark(self) -> None:
+        comparison_frame = sample_hedonic_frame()
+        extra_training_rows = pd.DataFrame(
+            [
+                _row(
+                    "trainer",
+                    "Trainer Apartment",
+                    "2026-07-01",
+                    210.0,
+                    latitude=35.7,
+                    longitude=24.2,
+                    room_size_sqm=85.0,
+                    bed_count=4.0,
+                    review_score=9.4,
+                    star_rating=5.0,
+                ),
+                _row(
+                    "trainer",
+                    "Trainer Apartment",
+                    "2026-08-01",
+                    230.0,
+                    latitude=35.7,
+                    longitude=24.2,
+                    room_size_sqm=85.0,
+                    bed_count=4.0,
+                    review_score=9.4,
+                    star_rating=5.0,
+                ),
+            ]
+        )
+        training_frame = pd.concat([comparison_frame, extra_training_rows], ignore_index=True)
+
+        payload = build_report_payload(
+            comparison_frame,
+            source_table="local.parquet",
+            training_frame=training_frame,
+            training_source_table="broad.parquet",
+            client="subject",
+            windows=[{"checkin": "2026-07-01", "lead_time_days": 7, "stay_length_days": 4}],
+            max_peers=3,
+            min_token_frequency=1,
+        )
+        report = render_markdown_report(payload)
+
+        self.assertEqual(payload["source_table"], "local.parquet")
+        self.assertEqual(payload["training_source_table"], "broad.parquet")
+        self.assertEqual(payload["training_properties"], 7)
+        self.assertEqual(payload["training_rows"], 14)
+        self.assertEqual(payload["benchmark"]["coverage"]["peer_price_rows"], 3)
+        self.assertIn("Comparable source table: `local.parquet`", report)
+        self.assertIn("Hedonic training table: `broad.parquet`", report)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -22,7 +22,11 @@ if str(REPO_ROOT) not in sys.path:
 from scripts.run_competitors import _default_subject_url, _load_spec
 from scripts.run_hedonic import build_report_payload
 from tourism_pricing_analytics.analysis.competitors import ComparableBenchmarkConfig
-from tourism_pricing_analytics.analysis.loader import DEFAULT_MODELLING_TABLE, load_modelling_table
+from tourism_pricing_analytics.analysis.loader import (
+    DEFAULT_HEDONIC_TRAINING_TABLE,
+    DEFAULT_MODELLING_TABLE,
+    load_modelling_table,
+)
 
 DEFAULT_WORKBOOK_PATH = REPO_ROOT / "data" / "modelling" / "competitive_pricing_workbook.xlsx"
 
@@ -360,7 +364,8 @@ def _summary_rows(payload: dict[str, Any]) -> list[list[object]]:
 
     return [
         ["Competitive Pricing Workbook"],
-        ["Source table", payload["source_table"]],
+        ["Comparable source table", payload["source_table"]],
+        ["Hedonic training table", payload.get("training_source_table", payload["source_table"])],
         ["Price unit", "EUR/night for a 2-guest Booking.com search"],
         [],
         ["Client"],
@@ -503,25 +508,25 @@ def workbook_sheets(payload: dict[str, Any]) -> list[tuple[str, str]]:
     )
     summary = _sheet_xml(
         _summary_rows(payload),
-        section_rows={4, 10, 22, 28, 38},
+        section_rows={5, 11, 23, 29, 39},
         cell_styles={
-            (8, 1): 4,
-            (13, 1): 4,
+            (9, 1): 4,
             (14, 1): 4,
             (15, 1): 4,
             (16, 1): 4,
-            (17, 1): 5,
-            (18, 1): 4,
-            (19, 1): 5,
-            (24, 1): 4,
+            (17, 1): 4,
+            (18, 1): 5,
+            (19, 1): 4,
+            (20, 1): 5,
             (25, 1): 4,
             (26, 1): 4,
-            (34, 1): 4,
-            (39, 1): 4,
+            (27, 1): 4,
+            (35, 1): 4,
             (40, 1): 4,
             (41, 1): 4,
             (42, 1): 4,
             (43, 1): 4,
+            (44, 1): 4,
         },
         numeric_columns={1},
         widths={0: 30, 1: 46},
@@ -593,6 +598,7 @@ def write_pricing_workbook(payload: dict[str, Any], out: Path) -> None:
 
 def build_workbook_payload(args: argparse.Namespace) -> dict[str, Any]:
     frame = load_modelling_table(args.path)
+    training_frame = load_modelling_table(args.training_path)
     spec = _load_spec(args)
     if spec is not None and args.subject_url:
         raise SystemExit("Use either --subject-url or a spec, not both.")
@@ -605,12 +611,20 @@ def build_workbook_payload(args: argparse.Namespace) -> dict[str, Any]:
         max_peers=args.max_peers,
         max_distance_km=args.max_distance_km,
         min_token_frequency=args.min_token_frequency,
+        training_frame=training_frame,
+        training_source_table=str(args.training_path),
     )
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--path", type=Path, default=DEFAULT_MODELLING_TABLE)
+    parser.add_argument(
+        "--training-path",
+        type=Path,
+        default=DEFAULT_HEDONIC_TRAINING_TABLE,
+        help="Broader table for hedonic model training.",
+    )
     parser.add_argument("--subject-url", default=None)
     parser.add_argument("--spec-json", default=None, help="Hand-entered client spec as JSON.")
     parser.add_argument("--spec-path", type=Path, default=None, help="Path to hand-entered client spec JSON.")

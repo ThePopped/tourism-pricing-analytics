@@ -70,7 +70,7 @@ def _position_class(residual_pct: float | None) -> str:
     ``residual_pct`` is the subject's price above (or below) the feature-matched
     comparable median, as a fraction of that median. This is the actionable
     number: it isolates how much is charged beyond a like-for-like rival, after
-    crediting the subject for its stronger features.
+    accounting for the subject's measurable feature profile.
     """
 
     if residual_pct is None:
@@ -127,12 +127,12 @@ def _bottom_line(
 
     feature_adjusted = {
         "unjustified_premium": (
-            "Even after crediting your stronger features, you sit well above a "
+            "Even after adjusting for measurable features, you sit well above a "
             "like-for-like rival, so most of the gap reads as pricing power to defend "
             "or an over-pricing risk to watch."
         ),
         "mixed_premium": (
-            "After crediting measurable features, a modest premium remains over a "
+            "After adjusting for measurable features, a modest premium remains over a "
             "like-for-like rival, reflecting pricing power or a little over-pricing risk."
         ),
         "fair": (
@@ -218,8 +218,9 @@ def _premium_lines(
 ) -> list[str]:
     lines = [
         "A raw price comparison is unfair if your property is genuinely better "
-        "equipped than the peers. The hedonic model adjusts peer prices up to your "
-        "level of features and quality, so you compare like with like.",
+        "or differently equipped than the peers. The hedonic model adjusts peer "
+        "prices to your measurable feature and quality profile, so you compare "
+        "like with like.",
         "",
         f"- Raw comparable median: {_fmt_money(raw_peer_median)}",
         f"- Feature-matched comparable median (peers adjusted to your quality): {_fmt_money(adjusted_peer_median)}",
@@ -232,7 +233,7 @@ def _premium_lines(
                 "",
                 "Splitting your gap over the raw comparable median:",
                 "",
-                f"- Justified by stronger features: {_fmt_money(feature_premium)}",
+                f"- Feature adjustment versus raw peers: {_fmt_money(feature_premium)}",
                 f"- Unexplained premium (pricing power or over-pricing risk): {_fmt_money(residual_premium)}",
             ]
         )
@@ -266,7 +267,7 @@ def _recommendation_lines(*, name: str, position_class: str) -> list[str]:
         ],
         "mixed_premium": [
             f"{name} carries a modest unexplained premium after measurable features are "
-            "credited. The position looks broadly defensible, but revisit the top end "
+            "accounted for. The position looks broadly defensible, but revisit the top end "
             "if occupancy softens.",
         ],
         "underpriced": [
@@ -319,8 +320,8 @@ def render_positioning_narrative(payload: dict[str, Any]) -> str:
         f"# Competitive Pricing Position: {name}",
         "",
         "A plain-language read of where this property sits against its comparable "
-        "local market, and how much of any price gap is earned by features versus "
-        "left unexplained.",
+        "local market, and how much of any price gap is explained by measurable "
+        "features versus left unexplained.",
         "",
         "## Bottom line",
         "",
@@ -364,7 +365,8 @@ def render_positioning_narrative(payload: dict[str, Any]) -> str:
         f"(grouped cross-validated log R-squared about {_fmt_pct((_num(metrics.get('r2_log_mean')) or 0) * 100)}, "
         f"typical error about {_fmt_money(metrics.get('mae_eur_mean'))} per night). Treat it as a "
         "directional adjustment, not an exact valuation.",
-        f"- Source table: `{payload.get('source_table', 'n/a')}`",
+        f"- Comparable source table: `{payload.get('source_table', 'n/a')}`",
+        f"- Hedonic training table: `{payload.get('training_source_table', payload.get('source_table', 'n/a'))}`",
         "",
     ]
     return "\n".join(lines)

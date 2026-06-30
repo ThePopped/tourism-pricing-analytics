@@ -32,6 +32,8 @@ class MarkdownReportOutputTests(unittest.TestCase):
 
         required_fragments = [
             "# Hedonic Price Adjustment",
+            "Comparable source table:",
+            "Hedonic training table:",
             "## Training Summary",
             "## OLS Market Premia",
             "## Feature-Adjusted Comparable Benchmark",
@@ -59,7 +61,9 @@ class MarkdownReportOutputTests(unittest.TestCase):
             "## Is the premium justified?",
             "## Recommendation",
             "## How to read these numbers",
-            "Justified by stronger features:",
+            "Comparable source table:",
+            "Hedonic training table:",
+            "Feature adjustment versus raw peers:",
             "Unexplained premium",
         ]
         for fragment in required_fragments:

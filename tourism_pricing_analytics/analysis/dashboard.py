@@ -181,6 +181,9 @@ def shape_dashboard_payload(
 
     return {
         "source_table": _json_safe(report_payload["source_table"]),
+        "training_source_table": _json_safe(
+            report_payload.get("training_source_table", report_payload["source_table"])
+        ),
         "price_unit": "EUR/night for a 2-guest Booking.com search",
         "client": {
             "property_name": _json_safe(client.get("property_name")),
@@ -404,7 +407,8 @@ function render(d) {
 
   const m = d.model;
   $("model").innerHTML = tableHtml([{key:"k",label:"Metric",fmt:v=>v},{key:"v",label:"Value",fmt:v=>v}],
-    [{k:"Source table",v:d.source_table},{k:"Training rows",v:m.training_rows},{k:"Training properties",v:m.training_properties},
+    [{k:"Comparable source table",v:d.source_table},{k:"Hedonic training table",v:d.training_source_table},
+     {k:"Training rows",v:m.training_rows},{k:"Training properties",v:m.training_properties},
      {k:"GBM mean log R2",v:num(m.gbm_r2_log_mean,3)},{k:"GBM mean EUR/night MAE",v:money(m.gbm_mae_eur_mean)},
      {k:"OLS R2",v:num(m.ols_r2,3)},{k:"Price unit",v:d.price_unit}]);
 

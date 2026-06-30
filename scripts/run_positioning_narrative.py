@@ -21,7 +21,11 @@ if str(REPO_ROOT) not in sys.path:
 
 from scripts.run_hedonic import _default_subject_url, _load_spec, _normalize_windows, build_report_payload
 from tourism_pricing_analytics.analysis.competitors import ComparableBenchmarkConfig
-from tourism_pricing_analytics.analysis.loader import DEFAULT_MODELLING_TABLE, load_modelling_table
+from tourism_pricing_analytics.analysis.loader import (
+    DEFAULT_HEDONIC_TRAINING_TABLE,
+    DEFAULT_MODELLING_TABLE,
+    load_modelling_table,
+)
 from tourism_pricing_analytics.analysis.narrative import render_positioning_narrative
 
 DEFAULT_REPORT_PATH = REPO_ROOT / "data" / "modelling" / "positioning_narrative.md"
@@ -30,6 +34,12 @@ DEFAULT_REPORT_PATH = REPO_ROOT / "data" / "modelling" / "positioning_narrative.
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--path", type=Path, default=DEFAULT_MODELLING_TABLE)
+    parser.add_argument(
+        "--training-path",
+        type=Path,
+        default=DEFAULT_HEDONIC_TRAINING_TABLE,
+        help="Broader table for hedonic model training.",
+    )
     parser.add_argument("--subject-url", default=None)
     parser.add_argument("--spec-json", default=None)
     parser.add_argument("--spec-path", type=Path, default=None)
@@ -42,6 +52,7 @@ def main() -> None:
     args = parser.parse_args()
 
     frame = load_modelling_table(args.path)
+    training_frame = load_modelling_table(args.training_path)
     spec = _load_spec(args)
     if spec is not None and args.subject_url:
         raise SystemExit("Use either --subject-url or a spec, not both.")
@@ -55,6 +66,8 @@ def main() -> None:
         max_peers=args.max_peers,
         max_distance_km=args.max_distance_km,
         min_token_frequency=args.min_token_frequency,
+        training_frame=training_frame,
+        training_source_table=str(args.training_path),
     )
     narrative = render_positioning_narrative(payload)
     args.out.parent.mkdir(parents=True, exist_ok=True)

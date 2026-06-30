@@ -16,12 +16,21 @@ The source run directory is generated local data and remains git-ignored. This
 Parquet file is committed so analysis code has a stable input without requiring
 the full scrape artifacts.
 
+`hedonic_training_table.parquet` is the broader committed training table used
+for the feature-adjustment model. The local Gerani table above remains the
+comparable/peer market for Stavros, while the hedonic model trains on the
+broader Chania/Crete property set to improve out-of-sample stability:
+
+- Source commit: `d9b5feb` (`data/modelling/modelling_table.parquet` at that point)
+- Shape: 5,331 rows x 53 columns
+- Self-catering training segment: 1,583 rows across 154 properties
+
 `competitive_pricing_workbook.xlsx` is a client-facing export built from the
 same table, comparable benchmark, and hedonic adjustment helpers:
 
 - Client subject: Stavros Villas & Apartments
 - Export command:
-  `.\.venv\Scripts\python.exe scripts\export_pricing_workbook.py --subject-url https://www.booking.com/hotel/gr/stavros-villas-amp-apartments.en-gb.html`
+  `.\.venv\Scripts\python.exe scripts\export_pricing_workbook.py --subject-url https://www.booking.com/hotel/gr/stavros-villas-amp-apartments.en-gb.html --training-path data\modelling\hedonic_training_table.parquet`
 - Sheets: summary, benchmark windows, peer set, raw peer rows, adjusted peer
   rows, and gap decomposition
 
@@ -31,7 +40,7 @@ plain-language prose for a non-technical operator:
 
 - Client subject: Stavros Villas & Apartments
 - Run command:
-  `.\.venv\Scripts\python.exe scripts\run_positioning_narrative.py --subject-url https://www.booking.com/hotel/gr/stavros-villas-amp-apartments.en-gb.html`
+  `.\.venv\Scripts\python.exe scripts\run_positioning_narrative.py --subject-url https://www.booking.com/hotel/gr/stavros-villas-amp-apartments.en-gb.html --training-path data\modelling\hedonic_training_table.parquet`
 - Reuses the same hedonic report payload as the workbook and dashboard, then
   renders a bottom line, peer set, price position, a feature-justified vs
   unexplained premium split, a recommendation, and interpretation caveats.
@@ -41,7 +50,8 @@ table and the comparable/hedonic helpers:
 
 - Run command: `.\.venv\Scripts\python.exe scripts\run_dashboard.py`
 - Zero extra dependencies: a stdlib `http.server` app that fits the hedonic
-  model once at startup, then re-runs only the peer benchmark per selection.
+  model once at startup from `hedonic_training_table.parquet`, then re-runs
+  only the local peer benchmark per selection.
 - Pick a self-catering subject property and benchmark window in the browser to
   see peer price position, the feature-adjusted benchmark, and the price-gap
   decomposition.
