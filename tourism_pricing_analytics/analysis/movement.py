@@ -79,6 +79,55 @@ AVAILABILITY_STATUSES = frozenset(
     }
 )
 
+MOVEMENT_STATUS_AVAILABLE = "available"
+MOVEMENT_STATUS_NEWLY_AVAILABLE = "newly_available"
+MOVEMENT_STATUS_DISAPPEARED = "disappeared"
+MOVEMENT_STATUS_STILL_UNAVAILABLE = "still_unavailable"
+MOVEMENT_STATUS_UNKNOWN = "unknown"
+MOVEMENT_AVAILABILITY_STATES = frozenset(
+    {
+        MOVEMENT_STATUS_AVAILABLE,
+        MOVEMENT_STATUS_NEWLY_AVAILABLE,
+        MOVEMENT_STATUS_DISAPPEARED,
+        MOVEMENT_STATUS_STILL_UNAVAILABLE,
+        MOVEMENT_STATUS_UNKNOWN,
+    }
+)
+
+MOVEMENT_CONTEXT_KEY = (
+    "property_url",
+    *DEDUPE_QUERY_CONTEXT_COLUMNS,
+)
+PRICE_MOVEMENT_COLUMNS = (
+    "snapshot_date",
+    "previous_snapshot_date",
+    "property_url",
+    "property_name",
+    "property_type",
+    "checkin",
+    "checkout",
+    "lead_time_days",
+    "previous_lead_time_days",
+    "stay_length_days",
+    "adults",
+    "children",
+    "rooms",
+    "currency",
+    "market",
+    "latitude",
+    "longitude",
+    "current_availability_status",
+    "previous_availability_status",
+    "availability_state",
+    "current_price_per_night",
+    "previous_price_per_night",
+    "price_change_eur",
+    "price_change_pct",
+    "current_offer_count",
+    "previous_offer_count",
+    "is_subject",
+)
+
 DEMAND_COVARIATE_COLUMNS = (
     "date",
     "checkin",
@@ -358,6 +407,240 @@ def movement_history_status(
         "min_snapshots": min_snapshots,
         "message": message,
     }
+
+
+def _filter_windows(frame: pd.DataFrame, windows: Iterable[dict[str, Any]] | None) -> pd.DataFrame:
+    if not windows:
+        return frame
+    if frame.empty:
+        return frame
+
+    mask = pd.Series(False, index=frame.index)
+    for window in windows:
+        window_mask = pd.Series(True, index=frame.index)
+        for raw_key, value in window.items():
+            key = "crete_season" if raw_key == "season" else raw_key
+            if value is None or key not in frame.columns:
+                continue
+            series = frame[key]
+            if key in {"checkin", "checkout", "snapshot_date"}:
+                comparable = pd.to_datetime(value).normalize()
+                window_mask &= pd.to_datetime(series, errors="coerce").dt.normalize().eq(comparable)
+            else:
+                window_mask &= series.eq(value)
+        mask |= window_mask
+    return frame.loc[mask].copy()
+
+
+def _filter_properties(
+    frame: pd.DataFrame,
+    *,
+    subject_url: str | None,
+    peer_property_urls: Iterable[str] | None,
+) -> pd.DataFrame:
+    property_urls = {url for url in ([subject_url] if subject_url else []) if url}
+    property_urls.update(url for url in (peer_property_urls or []) if url)
+    if not property_urls or frame.empty:
+        return frame
+    return frame.loc[frame["property_url"].isin(property_urls)].copy()
+
+
+def _aggregate_observation_prices(observations: pd.DataFrame) -> pd.DataFrame:
+    if observations.empty:
+        return pd.DataFrame(
+            columns=[
+                "snapshot_date",
+                *MOVEMENT_CONTEXT_KEY,
+                "current_price_per_night",
+                "current_offer_count",
+            ]
+        )
+
+    grouped = observations.groupby(["snapshot_date", *MOVEMENT_CONTEXT_KEY], dropna=False)
+    return (
+        grouped.agg(
+            current_price_per_night=("price_per_night", "median"),
+            current_offer_count=("price_per_night", "size"),
+        )
+        .reset_index()
+    )
+
+
+def _presence_from_available_observations(observations: pd.DataFrame) -> pd.DataFrame:
+    if observations.empty:
+        return pd.DataFrame(columns=OFFER_PRESENCE_COLUMNS)
+
+    grouped = observations.groupby(["snapshot_date", *MOVEMENT_CONTEXT_KEY], dropna=False)
+    presence = (
+        grouped.agg(
+            captured_at=("captured_at", "max"),
+            run_id=("run_id", "last"),
+            property_name=("property_name", "last"),
+            lead_time_days=("lead_time_days", "last"),
+            stay_length_days=("stay_length_days", "last"),
+            property_type=("property_type", "last"),
+            latitude=("latitude", "last"),
+            longitude=("longitude", "last"),
+        )
+        .reset_index()
+    )
+    presence["availability_status"] = AVAILABILITY_STATUS_AVAILABLE
+    presence["failure_reason"] = None
+    return presence.loc[:, list(OFFER_PRESENCE_COLUMNS)]
+
+
+def _dedupe_presence_for_movement(presence: pd.DataFrame) -> pd.DataFrame:
+    if presence.empty:
+        return presence.loc[:, list(OFFER_PRESENCE_COLUMNS)]
+
+    status_priority = {
+        AVAILABILITY_STATUS_AVAILABLE: 0,
+        AVAILABILITY_STATUS_NO_OFFER: 1,
+        AVAILABILITY_STATUS_FAILED: 2,
+    }
+    out = presence.copy()
+    out["_status_priority"] = out["availability_status"].map(status_priority)
+    out = (
+        out.sort_values(["snapshot_date", *MOVEMENT_CONTEXT_KEY, "_status_priority"])
+        .drop_duplicates(subset=["snapshot_date", *MOVEMENT_CONTEXT_KEY], keep="first")
+        .drop(columns=["_status_priority"])
+        .reset_index(drop=True)
+    )
+    return out.loc[:, list(OFFER_PRESENCE_COLUMNS)]
+
+
+def _availability_state(current: object, previous: object) -> str:
+    if pd.isna(previous) or current == AVAILABILITY_STATUS_FAILED or previous == AVAILABILITY_STATUS_FAILED:
+        return MOVEMENT_STATUS_UNKNOWN
+    if current == AVAILABILITY_STATUS_AVAILABLE and previous == AVAILABILITY_STATUS_AVAILABLE:
+        return MOVEMENT_STATUS_AVAILABLE
+    if current == AVAILABILITY_STATUS_AVAILABLE and previous == AVAILABILITY_STATUS_NO_OFFER:
+        return MOVEMENT_STATUS_NEWLY_AVAILABLE
+    if current == AVAILABILITY_STATUS_NO_OFFER and previous == AVAILABILITY_STATUS_AVAILABLE:
+        return MOVEMENT_STATUS_DISAPPEARED
+    if current == AVAILABILITY_STATUS_NO_OFFER and previous == AVAILABILITY_STATUS_NO_OFFER:
+        return MOVEMENT_STATUS_STILL_UNAVAILABLE
+    return MOVEMENT_STATUS_UNKNOWN
+
+
+def build_price_movement_table(
+    observations: pd.DataFrame,
+    presence: pd.DataFrame,
+    subject_url: str | None,
+    windows: Iterable[dict[str, Any]] | None,
+    peer_property_urls: Iterable[str] | None,
+) -> pd.DataFrame:
+    """Compare each snapshot with the previous matching property/window context.
+
+    Offer rows are collapsed to the property's median available EUR/night within
+    each snapshot and searched stay window. Availability transitions come from
+    explicit presence rows; observations only contribute explicit ``available``
+    presence when the presence store is absent.
+    """
+
+    normalized_observations = normalize_price_observations(observations)
+    if presence.empty and not normalized_observations.empty:
+        normalized_presence = normalize_offer_presence(
+            _presence_from_available_observations(normalized_observations)
+        )
+    else:
+        normalized_presence = normalize_offer_presence(presence)
+
+    normalized_observations = _filter_windows(normalized_observations, windows)
+    normalized_presence = _filter_windows(normalized_presence, windows)
+    normalized_observations = _filter_properties(
+        normalized_observations,
+        subject_url=subject_url,
+        peer_property_urls=peer_property_urls,
+    )
+    normalized_presence = _filter_properties(
+        normalized_presence,
+        subject_url=subject_url,
+        peer_property_urls=peer_property_urls,
+    )
+
+    if normalized_presence.empty:
+        empty = pd.DataFrame(columns=PRICE_MOVEMENT_COLUMNS)
+        empty.attrs["low_history"] = movement_history_status(
+            normalized_observations,
+            normalized_presence,
+        )
+        return empty
+
+    prices = _aggregate_observation_prices(normalized_observations)
+    current = _dedupe_presence_for_movement(normalized_presence).merge(
+        prices,
+        on=["snapshot_date", *MOVEMENT_CONTEXT_KEY],
+        how="left",
+    )
+    current = current.sort_values(["property_url", *DEDUPE_QUERY_CONTEXT_COLUMNS, "snapshot_date"])
+
+    previous_columns = [
+        "snapshot_date",
+        "lead_time_days",
+        "availability_status",
+        "current_price_per_night",
+        "current_offer_count",
+    ]
+    grouped = current.groupby(list(MOVEMENT_CONTEXT_KEY), dropna=False, sort=False)
+    for column in previous_columns:
+        current[f"previous_{column}"] = grouped[column].shift(1)
+
+    current["availability_state"] = [
+        _availability_state(current_status, previous_status)
+        for current_status, previous_status in zip(
+            current["availability_status"],
+            current["previous_availability_status"],
+            strict=True,
+        )
+    ]
+    current["price_change_eur"] = (
+        current["current_price_per_night"] - current["previous_current_price_per_night"]
+    )
+    current["price_change_pct"] = (
+        current["price_change_eur"] / current["previous_current_price_per_night"]
+    )
+    unavailable = current["availability_state"] != MOVEMENT_STATUS_AVAILABLE
+    current.loc[unavailable, ["price_change_eur", "price_change_pct"]] = pd.NA
+    current["is_subject"] = current["property_url"].eq(subject_url) if subject_url else False
+
+    movement = pd.DataFrame(
+        {
+            "snapshot_date": current["snapshot_date"],
+            "previous_snapshot_date": current["previous_snapshot_date"],
+            "property_url": current["property_url"],
+            "property_name": current["property_name"],
+            "property_type": current["property_type"],
+            "checkin": current["checkin"],
+            "checkout": current["checkout"],
+            "lead_time_days": current["lead_time_days"],
+            "previous_lead_time_days": current["previous_lead_time_days"],
+            "stay_length_days": current["stay_length_days"],
+            "adults": current["adults"],
+            "children": current["children"],
+            "rooms": current["rooms"],
+            "currency": current["currency"],
+            "market": current["market"],
+            "latitude": current["latitude"],
+            "longitude": current["longitude"],
+            "current_availability_status": current["availability_status"],
+            "previous_availability_status": current["previous_availability_status"],
+            "availability_state": current["availability_state"],
+            "current_price_per_night": current["current_price_per_night"],
+            "previous_price_per_night": current["previous_current_price_per_night"],
+            "price_change_eur": current["price_change_eur"],
+            "price_change_pct": current["price_change_pct"],
+            "current_offer_count": current["current_offer_count"],
+            "previous_offer_count": current["previous_current_offer_count"],
+            "is_subject": current["is_subject"],
+        },
+        columns=PRICE_MOVEMENT_COLUMNS,
+    ).reset_index(drop=True)
+    movement.attrs["low_history"] = movement_history_status(
+        normalized_observations,
+        normalized_presence,
+    )
+    return movement
 
 
 def load_price_observations(
