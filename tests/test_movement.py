@@ -20,6 +20,7 @@ from tourism_pricing_analytics.analysis.movement import (
     OFFER_PRESENCE_COLUMNS,
     PRICE_OBSERVATION_COLUMNS,
     MovementHistoryError,
+    build_peer_market_movement_table,
     build_price_movement_table,
     load_demand_covariates,
     load_offer_presence,
@@ -476,6 +477,110 @@ class SnapshotComparisonCoreTests(unittest.TestCase):
 
         self.assertTrue(movement.empty)
         self.assertEqual(movement.attrs["low_history"]["status"], HISTORY_STATUS_LOW_HISTORY)
+
+
+class PeerMarketMovementTests(unittest.TestCase):
+    def test_peer_market_medians_are_property_weighted_and_ranks_move(self) -> None:
+        observations = pd.DataFrame(
+            [
+                _movement_observation("subject", "Subject Stay", "2026-06-30", 450.0, 35.500),
+                _movement_observation("subject", "Subject Stay", "2026-07-01", 1050.0, 35.500),
+                _movement_observation("peer_multi", "Many Room Peer", "2026-06-30", 80.0, 35.501, room_id="m1"),
+                _movement_observation("peer_multi", "Many Room Peer", "2026-06-30", 80.0, 35.501, room_id="m2"),
+                _movement_observation("peer_multi", "Many Room Peer", "2026-06-30", 80.0, 35.501, room_id="m3"),
+                _movement_observation("peer_multi", "Many Room Peer", "2026-06-30", 80.0, 35.501, room_id="m4"),
+                _movement_observation("peer_multi", "Many Room Peer", "2026-06-30", 80.0, 35.501, room_id="m5"),
+                _movement_observation("peer_multi", "Many Room Peer", "2026-07-01", 100.0, 35.501, room_id="m1"),
+                _movement_observation("peer_multi", "Many Room Peer", "2026-07-01", 100.0, 35.501, room_id="m2"),
+                _movement_observation("peer_multi", "Many Room Peer", "2026-07-01", 100.0, 35.501, room_id="m3"),
+                _movement_observation("peer_multi", "Many Room Peer", "2026-07-01", 100.0, 35.501, room_id="m4"),
+                _movement_observation("peer_multi", "Many Room Peer", "2026-07-01", 100.0, 35.501, room_id="m5"),
+                _movement_observation("peer_high", "High Peer", "2026-06-30", 900.0, 35.502),
+                _movement_observation("peer_high", "High Peer", "2026-07-01", 1000.0, 35.502),
+            ]
+        )
+        presence = pd.DataFrame(
+            [
+                _movement_presence("subject", "Subject Stay", "2026-06-30", 35.500),
+                _movement_presence("subject", "Subject Stay", "2026-07-01", 35.500),
+                _movement_presence("peer_multi", "Many Room Peer", "2026-06-30", 35.501),
+                _movement_presence("peer_multi", "Many Room Peer", "2026-07-01", 35.501),
+                _movement_presence("peer_high", "High Peer", "2026-06-30", 35.502),
+                _movement_presence("peer_high", "High Peer", "2026-07-01", 35.502),
+            ]
+        )
+
+        movement = build_peer_market_movement_table(
+            observations,
+            presence,
+            observations,
+            subject_url="subject",
+            windows=[{"checkin": "2026-07-15", "stay_length_days": 4}],
+            max_peers=2,
+            w_geo=1.0,
+            w_sim=0.0,
+            max_distance_km=5.0,
+        )
+
+        latest_subject = movement.loc[
+            movement["snapshot_date"].eq(pd.Timestamp("2026-07-01"))
+            & movement["property_url"].eq("subject")
+        ].iloc[0]
+        self.assertEqual(movement.attrs["peer_property_urls"], ["peer_multi", "peer_high"])
+        self.assertEqual(latest_subject["peer_property_count"], 2)
+        self.assertEqual(latest_subject["current_peer_median_price_per_night"], 550.0)
+        self.assertEqual(latest_subject["previous_peer_median_price_per_night"], 490.0)
+        self.assertEqual(latest_subject["peer_median_change_eur"], 60.0)
+        self.assertAlmostEqual(latest_subject["peer_median_change_pct"], 60.0 / 490.0)
+        self.assertEqual(latest_subject["current_price_rank"], 1.0)
+        self.assertEqual(latest_subject["previous_price_rank"], 2.0)
+        self.assertEqual(latest_subject["price_rank_change"], 1.0)
+        self.assertEqual(latest_subject["price_gap_to_peer_median"], 500.0)
+
+
+def _movement_observation(
+    property_url: str,
+    property_name: str,
+    snapshot_date: str,
+    price_per_night: float,
+    latitude: float,
+    *,
+    room_id: str = "101",
+) -> dict[str, object]:
+    date = pd.Timestamp(snapshot_date)
+    lead_time_days = (pd.Timestamp("2026-07-15") - date).days
+    return sample_price_observation(
+        snapshot_date=snapshot_date,
+        captured_at=f"{snapshot_date}T09:15:00",
+        run_id=f"{date.strftime('%Y%m%d')}_091500_000000",
+        property_url=property_url,
+        property_name=property_name,
+        room_id=room_id,
+        room_name=f"Room {room_id}",
+        block_id=f"{room_id}_2026-07-15_2026-07-19",
+        lead_time_days=lead_time_days,
+        price_per_night=price_per_night,
+        current_price_value=price_per_night * 4,
+        latitude=latitude,
+    )
+
+
+def _movement_presence(
+    property_url: str,
+    property_name: str,
+    snapshot_date: str,
+    latitude: float,
+) -> dict[str, object]:
+    date = pd.Timestamp(snapshot_date)
+    return sample_offer_presence(
+        snapshot_date=snapshot_date,
+        captured_at=f"{snapshot_date}T09:15:00",
+        run_id=f"{date.strftime('%Y%m%d')}_091500_000000",
+        property_url=property_url,
+        property_name=property_name,
+        lead_time_days=(pd.Timestamp("2026-07-15") - date).days,
+        latitude=latitude,
+    )
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ from typing import Any
 import pandas as pd
 
 from config import DATA_DIR
+from tourism_pricing_analytics.analysis.competitors import rank_competitors
 
 DEFAULT_PRICE_OBSERVATIONS_PATH = DATA_DIR / "modelling" / "price_observations.parquet"
 DEFAULT_OFFER_PRESENCE_PATH = DATA_DIR / "modelling" / "offer_presence.parquet"
@@ -126,6 +127,28 @@ PRICE_MOVEMENT_COLUMNS = (
     "current_offer_count",
     "previous_offer_count",
     "is_subject",
+)
+PEER_MARKET_CONTEXT_COLUMNS = (
+    "snapshot_date",
+    *DEDUPE_QUERY_CONTEXT_COLUMNS,
+)
+PEER_MARKET_SUMMARY_COLUMNS = (
+    "peer_property_count",
+    "peer_available_property_count",
+    "previous_peer_available_property_count",
+    "current_peer_median_price_per_night",
+    "previous_peer_median_price_per_night",
+    "peer_median_change_eur",
+    "peer_median_change_pct",
+)
+PEER_MARKET_MOVEMENT_COLUMNS = (
+    *PRICE_MOVEMENT_COLUMNS,
+    *PEER_MARKET_SUMMARY_COLUMNS,
+    "price_gap_to_peer_median",
+    "price_gap_to_peer_median_pct",
+    "current_price_rank",
+    "previous_price_rank",
+    "price_rank_change",
 )
 
 DEMAND_COVARIATE_COLUMNS = (
@@ -641,6 +664,126 @@ def build_price_movement_table(
         normalized_presence,
     )
     return movement
+
+
+def select_movement_peers(
+    subject_url: str,
+    modelling_frame: pd.DataFrame,
+    *,
+    max_peers: int = 25,
+    w_geo: float = 0.5,
+    w_sim: float = 0.5,
+    max_distance_km: float = 8.0,
+    include_guest_house: bool = False,
+) -> pd.DataFrame:
+    """Return Phase 2 comparable peers to use for movement monitoring."""
+
+    return rank_competitors(
+        subject_url,
+        modelling_frame,
+        w_geo=w_geo,
+        w_sim=w_sim,
+        k=max_peers,
+        max_distance_km=max_distance_km,
+        include_guest_house=include_guest_house,
+    )
+
+
+def add_peer_market_context(movement: pd.DataFrame) -> pd.DataFrame:
+    """Add property-weighted peer medians and price-rank movement to rows."""
+
+    _require_columns(movement, PRICE_MOVEMENT_COLUMNS, "price movement")
+    if movement.empty:
+        empty = pd.DataFrame(columns=PEER_MARKET_MOVEMENT_COLUMNS)
+        empty.attrs.update(movement.attrs)
+        return empty
+
+    out = movement.copy()
+    context_columns = [column for column in PEER_MARKET_CONTEXT_COLUMNS if column in out.columns]
+    peer_rows = out.loc[~out["is_subject"].astype(bool)].copy()
+
+    if peer_rows.empty:
+        market = pd.DataFrame(columns=[*context_columns, *PEER_MARKET_SUMMARY_COLUMNS])
+    else:
+        grouped = peer_rows.groupby(context_columns, dropna=False)
+        market = (
+            grouped.agg(
+                peer_property_count=("property_url", "nunique"),
+                peer_available_property_count=(
+                    "current_price_per_night",
+                    lambda values: int(pd.to_numeric(values, errors="coerce").notna().sum()),
+                ),
+                previous_peer_available_property_count=(
+                    "previous_price_per_night",
+                    lambda values: int(pd.to_numeric(values, errors="coerce").notna().sum()),
+                ),
+                current_peer_median_price_per_night=("current_price_per_night", "median"),
+                previous_peer_median_price_per_night=("previous_price_per_night", "median"),
+            )
+            .reset_index()
+        )
+        market["peer_median_change_eur"] = (
+            market["current_peer_median_price_per_night"]
+            - market["previous_peer_median_price_per_night"]
+        )
+        market["peer_median_change_pct"] = (
+            market["peer_median_change_eur"] / market["previous_peer_median_price_per_night"]
+        )
+
+    out = out.merge(market, on=context_columns, how="left")
+    out["price_gap_to_peer_median"] = (
+        out["current_price_per_night"] - out["current_peer_median_price_per_night"]
+    )
+    out["price_gap_to_peer_median_pct"] = (
+        out["price_gap_to_peer_median"] / out["current_peer_median_price_per_night"]
+    )
+    out["current_price_rank"] = out.groupby(context_columns, dropna=False)[
+        "current_price_per_night"
+    ].rank(method="min", ascending=False)
+    out["previous_price_rank"] = out.groupby(context_columns, dropna=False)[
+        "previous_price_per_night"
+    ].rank(method="min", ascending=False)
+    out["price_rank_change"] = out["previous_price_rank"] - out["current_price_rank"]
+    return out.loc[:, list(PEER_MARKET_MOVEMENT_COLUMNS)].reset_index(drop=True)
+
+
+def build_peer_market_movement_table(
+    observations: pd.DataFrame,
+    presence: pd.DataFrame,
+    modelling_frame: pd.DataFrame,
+    subject_url: str,
+    windows: Iterable[dict[str, Any]] | None,
+    *,
+    max_peers: int = 25,
+    w_geo: float = 0.5,
+    w_sim: float = 0.5,
+    max_distance_km: float = 8.0,
+    include_guest_house: bool = False,
+) -> pd.DataFrame:
+    """Build movement rows with comparable-peer market medians and rank changes."""
+
+    peers = select_movement_peers(
+        subject_url,
+        modelling_frame,
+        max_peers=max_peers,
+        w_geo=w_geo,
+        w_sim=w_sim,
+        max_distance_km=max_distance_km,
+        include_guest_house=include_guest_house,
+    )
+    peer_property_urls = peers["property_url"].tolist() if not peers.empty else []
+    movement = build_price_movement_table(
+        observations,
+        presence,
+        subject_url=subject_url,
+        windows=windows,
+        peer_property_urls=peer_property_urls,
+    )
+    enriched = add_peer_market_context(movement)
+    enriched.attrs.update(movement.attrs)
+    enriched.attrs["peer_property_urls"] = peer_property_urls
+    enriched.attrs["peer_count"] = len(peer_property_urls)
+    return enriched
 
 
 def load_price_observations(

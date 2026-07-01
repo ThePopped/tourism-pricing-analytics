@@ -27,6 +27,12 @@ from tourism_pricing_analytics.analysis.hedonic import (
     group_kfold_splits,
 )
 from tourism_pricing_analytics.analysis.loader import load_modelling_table
+from tourism_pricing_analytics.analysis.movement import (
+    add_peer_market_context,
+    build_peer_market_movement_table,
+    build_price_movement_table,
+    select_movement_peers,
+)
 from tourism_pricing_analytics.analysis.narrative import render_positioning_narrative
 from tourism_pricing_analytics.analysis.segment import segment_self_catering
 
@@ -36,6 +42,8 @@ __all__ = [
     "HedonicFeatureMeta",
     "HedonicModelBundle",
     "build_design_matrix",
+    "build_peer_market_movement_table",
+    "build_price_movement_table",
     "client_spec_from_mapping",
     "comparable_benchmark",
     "comparable_benchmarks",
@@ -51,7 +59,9 @@ __all__ = [
     "render_index_html",
     "render_positioning_narrative",
     "segment_self_catering",
+    "select_movement_peers",
     "shape_dashboard_payload",
     "subject_catalog",
     "window_options",
+    "add_peer_market_context",
 ]
