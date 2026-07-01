@@ -1,7 +1,15 @@
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
 import pandas as pd
 
+from scripts.append_price_observations import (
+    append_price_observations,
+    append_price_observations_from_run,
+    build_price_observations_from_run,
+)
 from tourism_pricing_analytics.analysis.movement import (
     AVAILABILITY_STATUS_AVAILABLE,
     AVAILABILITY_STATUS_FAILED,
@@ -16,6 +24,13 @@ from tourism_pricing_analytics.analysis.movement import (
     validate_offer_presence,
     validate_price_observations,
 )
+
+
+def write_jsonl(path: Path, rows: list[dict]) -> None:
+    path.write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+        encoding="utf-8",
+    )
 
 
 def sample_price_observation(**overrides: object) -> dict[str, object]:
@@ -45,6 +60,62 @@ def sample_price_observation(**overrides: object) -> dict[str, object]:
     }
     row.update(overrides)
     return row
+
+
+def create_synthetic_run(run_dir: Path, *, captured_at: str, price: float) -> None:
+    run_dir.mkdir(parents=True)
+    write_jsonl(
+        run_dir / "price_rows.jsonl",
+        [
+            {
+                "property_name": "Apartment One",
+                "property_url": "https://example.test/apartment-one",
+                "checkin": "2026-07-15",
+                "checkout": "2026-07-19",
+                "lead_time_days": 15,
+                "stay_length_days": 4,
+                "room_id": "101",
+                "room_name": "Sea View Studio",
+                "block_id": "101_2026-07-15_2026-07-19",
+                "occupancy_text": "2 adults",
+                "conditions_text": "Free cancellation",
+                "scarcity_text": None,
+                "current_price_text": f"EUR {price}",
+                "original_price_text": None,
+                "current_price_value": price,
+                "original_price_value": None,
+                "price_per_night": price / 4,
+                "quantity_options": ["0", "1"],
+                "captured_at": captured_at,
+            }
+        ],
+    )
+    write_jsonl(
+        run_dir / "room_inventory.jsonl",
+        [
+            {
+                "property_name": "Apartment One",
+                "property_url": "https://example.test/apartment-one",
+                "room_id": "101",
+                "room_name": "Sea View Studio",
+                "captured_at": captured_at,
+            }
+        ],
+    )
+    write_jsonl(run_dir / "room_features.jsonl", [])
+    write_jsonl(
+        run_dir / "property_features.jsonl",
+        [
+            {
+                "property_name": "Apartment One",
+                "property_url": "https://example.test/apartment-one",
+                "captured_at": captured_at,
+                "property_type": "Apartment",
+                "latitude": 35.515,
+                "longitude": 24.018,
+            }
+        ],
+    )
 
 
 def sample_offer_presence(**overrides: object) -> dict[str, object]:
@@ -178,6 +249,78 @@ class OfferPresenceContractTests(unittest.TestCase):
         self.assertNotIn("room_id", PRESENCE_DEDUPE_KEY)
         self.assertNotIn("block_id", PRESENCE_DEDUPE_KEY)
         self.assertEqual(len(deduped), 4)
+
+
+class AppendPriceObservationsTests(unittest.TestCase):
+    def test_build_observations_from_synthetic_run_uses_feature_pipeline(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "20260630_091500_000000"
+            create_synthetic_run(run_dir, captured_at="2026-06-30T09:15:00", price=500.0)
+
+            frame = build_price_observations_from_run(run_dir)
+
+        self.assertEqual(list(frame.columns), list(PRICE_OBSERVATION_COLUMNS))
+        self.assertEqual(frame.shape, (1, len(PRICE_OBSERVATION_COLUMNS)))
+        self.assertEqual(frame.loc[0, "snapshot_date"], pd.Timestamp("2026-06-30"))
+        self.assertEqual(frame.loc[0, "run_id"], "20260630_091500_000000")
+        self.assertEqual(frame.loc[0, "adults"], 2)
+        self.assertEqual(frame.loc[0, "children"], 0)
+        self.assertEqual(frame.loc[0, "rooms"], 1)
+        self.assertEqual(frame.loc[0, "currency"], "EUR")
+        self.assertEqual(frame.loc[0, "market"], "Chania")
+        self.assertEqual(frame.loc[0, "property_type"], "Apartment")
+        self.assertEqual(frame.loc[0, "price_per_night"], 125.0)
+
+    def test_append_writes_parquet_and_dedupes_repeated_observations(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = Path(tmp) / "price_observations.parquet"
+            frame = pd.DataFrame([sample_price_observation()])
+
+            first = append_price_observations(frame, out_path)
+            second = append_price_observations(frame, out_path)
+            round_tripped = pd.read_parquet(out_path)
+
+        self.assertEqual(len(first), 1)
+        self.assertEqual(len(second), 1)
+        self.assertEqual(round_tripped.shape, (1, len(PRICE_OBSERVATION_COLUMNS)))
+
+    def test_append_keeps_distinct_query_context_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = Path(tmp) / "price_observations.parquet"
+            frame = pd.DataFrame(
+                [
+                    sample_price_observation(),
+                    sample_price_observation(adults=3, current_price_value=600.0),
+                    sample_price_observation(currency="USD", current_price_value=650.0),
+                    sample_price_observation(market="Rethymno", current_price_value=700.0),
+                ]
+            )
+
+            appended = append_price_observations(frame, out_path)
+
+        self.assertEqual(len(appended), 4)
+        self.assertEqual(set(appended["adults"]), {2, 3})
+        self.assertEqual(set(appended["currency"]), {"EUR", "USD"})
+        self.assertEqual(set(appended["market"]), {"Chania", "Rethymno"})
+
+    def test_append_from_run_appends_second_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            first_run = tmp_path / "20260630_091500_000000"
+            second_run = tmp_path / "20260701_091500_000000"
+            out_path = tmp_path / "price_observations.parquet"
+            create_synthetic_run(first_run, captured_at="2026-06-30T09:15:00", price=500.0)
+            create_synthetic_run(second_run, captured_at="2026-07-01T09:15:00", price=540.0)
+
+            append_price_observations_from_run(first_run, out_path)
+            appended = append_price_observations_from_run(second_run, out_path)
+
+        self.assertEqual(len(appended), 2)
+        self.assertEqual(
+            list(appended["snapshot_date"]),
+            [pd.Timestamp("2026-06-30"), pd.Timestamp("2026-07-01")],
+        )
+        self.assertEqual(list(appended["price_per_night"]), [125.0, 135.0])
 
 
 if __name__ == "__main__":
