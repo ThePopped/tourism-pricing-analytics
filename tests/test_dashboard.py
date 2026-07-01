@@ -90,6 +90,23 @@ class RenderIndexTests(unittest.TestCase):
         self.assertIn("api/benchmark", html)
         self.assertIn("api/meta", html)
 
+    def test_index_html_has_price_movements_tab_and_mount_points(self) -> None:
+        html = render_index_html()
+        # The Price Movements tab is wired to the movements API.
+        self.assertIn("Price Movements", html)
+        self.assertIn('data-tab="movements"', html)
+        self.assertIn("api/movements", html)
+        # Compact tab mount points: KPIs, action panel, competitor table, timeline.
+        for mount in [
+            'id="movements-view"',
+            'id="mv-kpis"',
+            'id="mv-action"',
+            'id="mv-peers"',
+            'id="mv-timeline"',
+            'id="mv-history"',
+        ]:
+            self.assertIn(mount, html)
+
 
 class DashboardServiceTests(unittest.TestCase):
     def test_service_fits_once_and_answers_benchmarks(self) -> None:

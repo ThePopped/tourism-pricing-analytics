@@ -276,6 +276,25 @@ _INDEX_HTML = """<!doctype html>
   .scale .lab.mk { color:var(--bad); top:36px; }
   #status { color:var(--muted); font-size:13px; margin-bottom:14px; min-height:18px; }
   .err { color:var(--bad); }
+  .tabs { display:flex; gap:6px; border-bottom:1px solid var(--line); margin-bottom:18px; }
+  .tab { background:transparent; color:var(--muted); border:0; border-bottom:2px solid transparent;
+         border-radius:0; padding:9px 16px; font-size:13px; cursor:pointer; }
+  .tab.active { color:var(--accent); border-bottom-color:var(--accent); font-weight:600; }
+  .notice { background:#fff; border:1px solid var(--line); border-radius:8px; padding:16px 18px;
+            color:var(--muted); margin-bottom:18px; }
+  .notice.warn { background:#fef3c7; border-color:#fde68a; color:#92400e; }
+  .badge { display:inline-block; border-radius:999px; padding:4px 14px; font-size:14px; font-weight:600; }
+  .badge.act-hold { background:#e0e7ff; color:#3730a3; }
+  .badge.act-increase { background:#dcfce7; color:#166534; }
+  .badge.act-discount { background:#fee2e2; color:#991b1b; }
+  .badge.act-watch { background:#fef3c7; color:#92400e; }
+  .badge.act-none { background:#f3f4f6; color:#374151; }
+  .conf { font-size:12px; text-transform:uppercase; letter-spacing:.04em; margin-left:10px; }
+  .conf-high { color:var(--good); } .conf-medium { color:#b45309; } .conf-low { color:var(--bad); }
+  .codes { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+  .code { background:var(--accent-soft); color:var(--accent); border-radius:999px; padding:3px 10px; font-size:12px; }
+  .code.flag { background:#fee2e2; color:#991b1b; }
+  .action-rationale { margin:10px 0 0; }
 </style>
 </head>
 <body>
@@ -294,8 +313,12 @@ _INDEX_HTML = """<!doctype html>
     <div class="field"><label for="season">Season</label><select id="season"></select></div>
     <div class="field"><label for="peers">Max peers</label>
       <input id="peers" type="number" min="1" max="50" value="10"/></div>
-    <button id="run">Run benchmark</button>
+    <button id="run">Run</button>
   </div>
+  <nav class="tabs">
+    <button class="tab active" data-tab="benchmark" id="tab-benchmark">Benchmark</button>
+    <button class="tab" data-tab="movements" id="tab-movements">Price Movements</button>
+  </nav>
   <div id="status">Loading catalog&hellip;</div>
   <div id="report" hidden>
     <div class="kpis" id="kpis"></div>
@@ -310,12 +333,23 @@ _INDEX_HTML = """<!doctype html>
       <p class="muted">High OLS condition number: read as descriptive premia, not causal estimates.</p></section>
     <section class="card"><h2>Model &amp; source</h2><div id="model"></div></section>
   </div>
+  <div id="movements-view" hidden>
+    <div class="notice" id="mv-history"></div>
+    <div class="kpis" id="mv-kpis"></div>
+    <section class="card" id="mv-action-card"><h2>Recommended action</h2><div id="mv-action"></div></section>
+    <section class="card"><h2>Competitor price movements</h2><div id="mv-peers"></div>
+      <p class="muted">Property-weighted peer medians: each property's median first, then the peer-market median. Latest comparable snapshot.</p></section>
+    <section class="card"><h2>Subject vs peer timeline</h2><div id="mv-timeline"></div></section>
+    <div class="notice" id="mv-covariates"></div>
+  </div>
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
 const money = (v) => v == null ? "n/a" : "EUR " + Number(v).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
 const pct = (v) => v == null ? "n/a" : Number(v).toFixed(1) + "%";
 const num = (v, d=2) => v == null ? "n/a" : Number(v).toFixed(d);
+let activeTab = "benchmark";
+const loaded = {benchmark: false, movements: false};
 
 function fillSelect(el, values, {anyLabel, mapper} = {}) {
   el.innerHTML = "";
@@ -412,19 +446,85 @@ function render(d) {
      {k:"GBM mean log R2",v:num(m.gbm_r2_log_mean,3)},{k:"GBM mean EUR/night MAE",v:money(m.gbm_mae_eur_mean)},
      {k:"OLS R2",v:num(m.ols_r2,3)},{k:"Price unit",v:d.price_unit}]);
 
-  $("report").hidden = false;
+  loaded.benchmark = true;
+  $("report").hidden = activeTab !== "benchmark";
 }
 
-async function runBenchmark() {
+const fracPct = (v) => v == null ? "n/a" : (Number(v) * 100).toFixed(1) + "%";
+const signedFracPct = (v) => v == null ? "n/a" : (Number(v) > 0 ? "+" : "") + (Number(v) * 100).toFixed(1) + "%";
+const signedMoney = (v) => v == null ? "n/a" : (Number(v) > 0 ? "+" : "") + money(v);
+const ACTION_CLASS = {"Hold":"act-hold","Increase test":"act-increase","Discount test":"act-discount","Watch":"act-watch","No signal":"act-none"};
+const AVAIL_LABEL = {available:"Available",newly_available:"Newly available",disappeared:"Disappeared",still_unavailable:"Still unavailable",unknown:"Unknown"};
+
+function chips(codes, cls) {
+  if (!codes || !codes.length) return "";
+  return `<div class="codes">` + codes.map(c => `<span class="code ${cls||''}">${c}</span>`).join("") + `</div>`;
+}
+
+function renderMovements(d) {
+  const h = d.history || {};
+  const histEl = $("mv-history");
+  histEl.className = h.is_low_history ? "notice warn" : "notice";
+  histEl.textContent = h.message || "";
+
+  const cov = d.covariates || {};
+  $("mv-covariates").textContent = cov.status || "";
+
+  const mp = d.market_pressure || {};
+  $("mv-kpis").innerHTML = [
+    ["Market pressure", mp.market_pressure_label || "n/a", `${num(mp.market_pressure_score, 1)} index points`],
+    ["Peer median change", signedFracPct(mp.peer_median_change_pct), signedMoney(mp.peer_median_change_eur) + " vs previous"],
+    ["Subject price change", signedFracPct(mp.subject_price_change_pct), signedMoney(mp.subject_price_change_eur) + " vs previous"],
+    ["Gap to peer median", signedFracPct(mp.price_gap_to_peer_median_pct), "subject vs peer median"],
+  ].map(([l,v,s]) => `<div class="kpi"><div class="label">${l}</div><div class="value">${v}</div><div class="sub">${s}</div></div>`).join("");
+
+  const ap = d.action_payload || {};
+  const act = ap.recommended_action || "No signal";
+  const conf = ap.confidence || "low";
+  $("mv-action").innerHTML =
+    `<span class="badge ${ACTION_CLASS[act] || "act-none"}">${act}</span>` +
+    `<span class="conf conf-${conf}">${conf} confidence</span>` +
+    `<p class="action-rationale">${ap.rationale || ""}</p>` +
+    chips(ap.reason_codes, "") + chips(ap.confidence_flags, "flag");
+
+  $("mv-peers").innerHTML = (d.peer_movements && d.peer_movements.length) ? tableHtml([
+    {key:"property_name",label:"Property",fmt:v=>v||"n/a"},
+    {key:"availability_state",label:"Availability",fmt:v=>AVAIL_LABEL[v]||v||"n/a"},
+    {key:"current_price_per_night",label:"Now",num:true,fmt:v=>money(v)},
+    {key:"previous_price_per_night",label:"Previous",num:true,fmt:v=>money(v)},
+    {key:"price_change_eur",label:"Change",num:true,fmt:v=>signedMoney(v)},
+    {key:"price_change_pct",label:"Change %",num:true,fmt:v=>signedFracPct(v)},
+    {key:"current_price_rank",label:"Rank",num:true,fmt:v=>v==null?"n/a":num(v,0)},
+    {key:"price_rank_change",label:"Rank +/-",num:true,fmt:v=>v==null?"n/a":(Number(v)>0?"+":"")+num(v,0)},
+  ], d.peer_movements) : "<p class='muted'>No comparable peer movements in the latest snapshot.</p>";
+
+  $("mv-timeline").innerHTML = (d.timeline && d.timeline.length) ? tableHtml([
+    {key:"snapshot_date",label:"Snapshot",fmt:v=>v||"n/a"},
+    {key:"subject_price_per_night",label:"Subject",num:true,fmt:v=>money(v)},
+    {key:"subject_price_change_pct",label:"Subject %",num:true,fmt:v=>signedFracPct(v)},
+    {key:"peer_median_price_per_night",label:"Peer median",num:true,fmt:v=>money(v)},
+    {key:"peer_median_change_pct",label:"Peer %",num:true,fmt:v=>signedFracPct(v)},
+    {key:"peer_available_property_count",label:"Peers avail",num:true,fmt:v=>v==null?"n/a":num(v,0)},
+  ], d.timeline) : "<p class='muted'>Not enough snapshots to plot a subject-vs-peer timeline yet.</p>";
+
+  loaded.movements = true;
+  $("movements-view").hidden = activeTab !== "movements";
+}
+
+function queryParams() {
   const p = new URLSearchParams();
   if ($("subject").value) p.set("subject_url", $("subject").value);
   if ($("lead").value) p.set("lead_time_days", $("lead").value);
   if ($("stay").value) p.set("stay_length_days", $("stay").value);
   if ($("season").value) p.set("season", $("season").value);
   if ($("peers").value) p.set("max_peers", $("peers").value);
+  return p;
+}
+
+async function runBenchmark() {
   $("run").disabled = true; $("status").className = ""; $("status").textContent = "Running benchmark…";
   try {
-    const res = await fetch("api/benchmark?" + p.toString());
+    const res = await fetch("api/benchmark?" + queryParams().toString());
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
     render(data); $("status").textContent = "";
@@ -433,7 +533,31 @@ async function runBenchmark() {
   } finally { $("run").disabled = false; }
 }
 
-$("run").addEventListener("click", runBenchmark);
+async function runMovements() {
+  $("run").disabled = true; $("status").className = ""; $("status").textContent = "Loading price movements…";
+  try {
+    const res = await fetch("api/movements?" + queryParams().toString());
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
+    renderMovements(data); $("status").textContent = "";
+  } catch (e) {
+    $("status").className = "err"; $("status").textContent = "Error: " + e.message; $("movements-view").hidden = true;
+  } finally { $("run").disabled = false; }
+}
+
+function runActive() { return activeTab === "movements" ? runMovements() : runBenchmark(); }
+
+function showTab(tab) {
+  activeTab = tab;
+  for (const b of document.querySelectorAll(".tab")) b.classList.toggle("active", b.dataset.tab === tab);
+  $("report").hidden = !(tab === "benchmark" && loaded.benchmark);
+  $("movements-view").hidden = !(tab === "movements" && loaded.movements);
+  $("status").className = ""; $("status").textContent = "";
+  if (!loaded[tab]) runActive();
+}
+
+$("run").addEventListener("click", () => { loaded[activeTab] = false; runActive(); });
+for (const b of document.querySelectorAll(".tab")) b.addEventListener("click", () => showTab(b.dataset.tab));
 loadMeta().then(runBenchmark).catch(e => { $("status").className="err"; $("status").textContent = "Failed to load catalog: " + e.message; });
 </script>
 </body>
