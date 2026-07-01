@@ -6,6 +6,11 @@ import pandas as pd
 
 from tests.test_price_observations import sample_offer_presence, sample_price_observation
 from tourism_pricing_analytics.analysis.movement import (
+    ACTION_DISCOUNT_TEST,
+    ACTION_INCREASE_TEST,
+    ACTION_NO_SIGNAL,
+    CONFIDENCE_HIGH,
+    CONFIDENCE_LOW,
     COVARIATE_STATUS_LOADED,
     COVARIATE_STATUS_MISSING,
     DEMAND_COVARIATE_COLUMNS,
@@ -18,13 +23,27 @@ from tourism_pricing_analytics.analysis.movement import (
     MOVEMENT_STATUS_STILL_UNAVAILABLE,
     MOVEMENT_STATUS_UNKNOWN,
     OFFER_PRESENCE_COLUMNS,
+    PEER_MARKET_MOVEMENT_COLUMNS,
     PRICE_OBSERVATION_COLUMNS,
+    REASON_EXTERNAL_COVARIATES_MISSING,
+    REASON_HOLIDAY_OR_EVENT_PRESSURE,
+    REASON_LEAD_TIME_COMPRESSION,
+    REASON_MARKET_FIRMING,
+    REASON_MARKET_SOFTENING,
+    REASON_NEARBY_UNDERCUTTERS_DISCOUNTING,
+    REASON_POSSIBLE_PRICE_HEADROOM,
+    REASON_PREMIUM_NOT_FEATURE_SUPPORTED,
+    REASON_SEARCH_DEMAND_RISING,
+    REASON_WEATHER_POSSIBLE_FACTOR,
     MovementHistoryError,
+    add_movement_signals,
     build_peer_market_movement_table,
     build_price_movement_table,
     load_demand_covariates,
     load_offer_presence,
     load_price_observations,
+    market_pressure_index,
+    movement_action_payload,
     movement_history_status,
     normalize_demand_covariates,
     validate_demand_covariates,
@@ -538,6 +557,107 @@ class PeerMarketMovementTests(unittest.TestCase):
         self.assertEqual(latest_subject["price_gap_to_peer_median"], 500.0)
 
 
+class MovementSignalTests(unittest.TestCase):
+    def test_market_pressure_and_covariates_support_increase_test(self) -> None:
+        movement = pd.DataFrame(
+            [
+                _peer_movement_row(
+                    current_price_per_night=100.0,
+                    previous_price_per_night=100.0,
+                    current_peer_median_price_per_night=130.0,
+                    previous_peer_median_price_per_night=110.0,
+                    peer_property_count=4,
+                )
+            ],
+            columns=PEER_MARKET_MOVEMENT_COLUMNS,
+        )
+        covariates = normalize_demand_covariates(
+            pd.DataFrame(
+                [
+                    {
+                        "date": "2026-07-01",
+                        "checkin": "2026-07-15",
+                        "market": "Chania",
+                        "google_trends_index": 80,
+                        "holiday_flag": True,
+                        "event_flag": False,
+                        "weather_temp_c": 34.0,
+                        "weather_rain_mm": 0.0,
+                        "notes": "Synthetic peak demand context.",
+                    }
+                ],
+                columns=DEMAND_COVARIATE_COLUMNS,
+            )
+        )
+
+        signalled = add_movement_signals(movement, covariates)
+        summary = market_pressure_index(signalled)
+        row = signalled.iloc[0]
+
+        self.assertEqual(summary["market_pressure_label"], "firming")
+        self.assertGreater(summary["market_pressure_score"], 18.0)
+        self.assertEqual(row["recommended_action"], ACTION_INCREASE_TEST)
+        self.assertEqual(row["confidence"], CONFIDENCE_HIGH)
+        self.assertEqual(row["confidence_flags"], [])
+        for code in [
+            REASON_MARKET_FIRMING,
+            REASON_LEAD_TIME_COMPRESSION,
+            REASON_POSSIBLE_PRICE_HEADROOM,
+            REASON_SEARCH_DEMAND_RISING,
+            REASON_HOLIDAY_OR_EVENT_PRESSURE,
+            REASON_WEATHER_POSSIBLE_FACTOR,
+        ]:
+            self.assertIn(code, row["reason_codes"])
+        self.assertNotIn(REASON_EXTERNAL_COVARIATES_MISSING, row["reason_codes"])
+
+    def test_soft_market_premium_without_covariates_returns_discount_test(self) -> None:
+        movement = pd.DataFrame(
+            [
+                _peer_movement_row(
+                    current_price_per_night=150.0,
+                    previous_price_per_night=150.0,
+                    current_peer_median_price_per_night=100.0,
+                    previous_peer_median_price_per_night=120.0,
+                    peer_property_count=4,
+                )
+            ],
+            columns=PEER_MARKET_MOVEMENT_COLUMNS,
+        )
+
+        signalled = add_movement_signals(movement)
+        row = signalled.iloc[0]
+
+        self.assertEqual(row["market_pressure_label"], "softening")
+        self.assertEqual(row["recommended_action"], ACTION_DISCOUNT_TEST)
+        self.assertEqual(row["confidence"], "medium")
+        for code in [
+            REASON_MARKET_SOFTENING,
+            REASON_NEARBY_UNDERCUTTERS_DISCOUNTING,
+            REASON_PREMIUM_NOT_FEATURE_SUPPORTED,
+            REASON_EXTERNAL_COVARIATES_MISSING,
+        ]:
+            self.assertIn(code, row["reason_codes"])
+
+    def test_low_history_or_unavailable_rows_return_low_confidence_no_signal(self) -> None:
+        row = _peer_movement_row(
+            previous_snapshot_date=pd.NaT,
+            availability_state=MOVEMENT_STATUS_UNKNOWN,
+            current_price_per_night=pd.NA,
+            previous_price_per_night=pd.NA,
+            current_peer_median_price_per_night=pd.NA,
+            previous_peer_median_price_per_night=pd.NA,
+            peer_property_count=1,
+        )
+
+        payload = movement_action_payload(row)
+
+        self.assertEqual(payload["recommended_action"], ACTION_NO_SIGNAL)
+        self.assertEqual(payload["confidence"], CONFIDENCE_LOW)
+        self.assertIn("missing_previous_snapshot", payload["confidence_flags"])
+        self.assertIn("availability_not_comparable", payload["confidence_flags"])
+        self.assertIn("missing_peer_market_median", payload["confidence_flags"])
+
+
 def _movement_observation(
     property_url: str,
     property_name: str,
@@ -581,6 +701,94 @@ def _movement_presence(
         lead_time_days=(pd.Timestamp("2026-07-15") - date).days,
         latitude=latitude,
     )
+
+
+def _peer_movement_row(**overrides: object) -> dict[str, object]:
+    current_peer = overrides.get("current_peer_median_price_per_night", 130.0)
+    previous_peer = overrides.get("previous_peer_median_price_per_night", 110.0)
+    current_price = overrides.get("current_price_per_night", 100.0)
+    previous_price = overrides.get("previous_price_per_night", 100.0)
+    peer_change = (
+        pd.NA
+        if _test_missing(current_peer) or _test_missing(previous_peer) or previous_peer == 0
+        else (float(current_peer) - float(previous_peer)) / float(previous_peer)
+    )
+    price_change = (
+        pd.NA
+        if _test_missing(current_price) or _test_missing(previous_price) or previous_price == 0
+        else (float(current_price) - float(previous_price)) / float(previous_price)
+    )
+    gap = (
+        pd.NA
+        if _test_missing(current_price) or _test_missing(current_peer)
+        else float(current_price) - float(current_peer)
+    )
+    gap_pct = (
+        pd.NA
+        if _test_missing(gap) or _test_missing(current_peer) or current_peer == 0
+        else float(gap) / float(current_peer)
+    )
+    row: dict[str, object] = {
+        "snapshot_date": pd.Timestamp("2026-07-01"),
+        "previous_snapshot_date": pd.Timestamp("2026-06-30"),
+        "property_url": "subject",
+        "property_name": "Subject Stay",
+        "property_type": "Apartment",
+        "checkin": pd.Timestamp("2026-07-15"),
+        "checkout": pd.Timestamp("2026-07-19"),
+        "lead_time_days": 14,
+        "previous_lead_time_days": 15,
+        "stay_length_days": 4,
+        "adults": 2,
+        "children": 0,
+        "rooms": 1,
+        "currency": "EUR",
+        "market": "Chania",
+        "latitude": 35.5,
+        "longitude": 24.0,
+        "current_availability_status": "available",
+        "previous_availability_status": "available",
+        "availability_state": MOVEMENT_STATUS_AVAILABLE,
+        "current_price_per_night": current_price,
+        "previous_price_per_night": previous_price,
+        "price_change_eur": (
+            pd.NA
+            if _test_missing(current_price) or _test_missing(previous_price)
+            else float(current_price) - float(previous_price)
+        ),
+        "price_change_pct": price_change,
+        "current_offer_count": 1,
+        "previous_offer_count": 1,
+        "is_subject": True,
+        "peer_property_count": 4,
+        "peer_available_property_count": 4,
+        "previous_peer_available_property_count": 4,
+        "current_peer_median_price_per_night": current_peer,
+        "previous_peer_median_price_per_night": previous_peer,
+        "peer_median_change_eur": (
+            pd.NA
+            if _test_missing(current_peer) or _test_missing(previous_peer)
+            else float(current_peer) - float(previous_peer)
+        ),
+        "peer_median_change_pct": peer_change,
+        "price_gap_to_peer_median": gap,
+        "price_gap_to_peer_median_pct": gap_pct,
+        "current_price_rank": 3.0,
+        "previous_price_rank": 3.0,
+        "price_rank_change": 0.0,
+    }
+    row.update(overrides)
+    return row
+
+
+def _test_missing(value: object) -> bool:
+    if value is pd.NA or value is None:
+        return True
+    try:
+        missing = pd.isna(value)
+    except TypeError:
+        return False
+    return bool(missing) if isinstance(missing, bool) else False
 
 
 if __name__ == "__main__":

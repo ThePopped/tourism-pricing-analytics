@@ -28,9 +28,13 @@ from tourism_pricing_analytics.analysis.hedonic import (
 )
 from tourism_pricing_analytics.analysis.loader import load_modelling_table
 from tourism_pricing_analytics.analysis.movement import (
+    add_movement_signals,
     add_peer_market_context,
     build_peer_market_movement_table,
     build_price_movement_table,
+    market_pressure_index,
+    movement_action_payload,
+    movement_reason_codes,
     select_movement_peers,
 )
 from tourism_pricing_analytics.analysis.narrative import render_positioning_narrative
@@ -53,7 +57,10 @@ __all__ = [
     "fit_hedonic_models",
     "group_kfold_splits",
     "load_modelling_table",
+    "market_pressure_index",
     "modelling_table_summary",
+    "movement_action_payload",
+    "movement_reason_codes",
     "peer_price_benchmark",
     "rank_competitors",
     "render_index_html",
@@ -63,5 +70,6 @@ __all__ = [
     "shape_dashboard_payload",
     "subject_catalog",
     "window_options",
+    "add_movement_signals",
     "add_peer_market_context",
 ]

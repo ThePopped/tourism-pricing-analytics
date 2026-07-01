@@ -150,6 +150,19 @@ PEER_MARKET_MOVEMENT_COLUMNS = (
     "previous_price_rank",
     "price_rank_change",
 )
+MOVEMENT_SIGNAL_COLUMNS = (
+    "market_pressure_label",
+    "market_pressure_score",
+    "reason_codes",
+    "recommended_action",
+    "rationale",
+    "confidence",
+    "confidence_flags",
+)
+SIGNALLED_PEER_MARKET_MOVEMENT_COLUMNS = (
+    *PEER_MARKET_MOVEMENT_COLUMNS,
+    *MOVEMENT_SIGNAL_COLUMNS,
+)
 
 DEMAND_COVARIATE_COLUMNS = (
     "date",
@@ -176,6 +189,69 @@ HISTORY_STATUS_LOW_HISTORY = "low_history"
 HISTORY_STATUS_MISSING = "missing"
 COVARIATE_STATUS_LOADED = "External covariates loaded."
 COVARIATE_STATUS_MISSING = "No external covariates loaded."
+
+REASON_MARKET_FIRMING = "market_firming"
+REASON_MARKET_SOFTENING = "market_softening"
+REASON_PROPERTY_SPECIFIC_INCREASE = "property_specific_increase"
+REASON_PROPERTY_SPECIFIC_DISCOUNT = "property_specific_discount"
+REASON_LEAD_TIME_COMPRESSION = "lead_time_compression"
+REASON_AVAILABILITY_COMPRESSION = "availability_compression"
+REASON_NEARBY_UNDERCUTTERS_DISCOUNTING = "nearby_undercutters_discounting"
+REASON_PREMIUM_NOT_FEATURE_SUPPORTED = "premium_not_feature_supported"
+REASON_POSSIBLE_PRICE_HEADROOM = "possible_price_headroom"
+REASON_LOW_CONFIDENCE_LOW_HISTORY = "low_confidence_low_history"
+REASON_EXTERNAL_COVARIATES_MISSING = "external_covariates_missing"
+REASON_SEARCH_DEMAND_RISING = "search_demand_rising"
+REASON_SEARCH_DEMAND_SOFTENING = "search_demand_softening"
+REASON_HOLIDAY_OR_EVENT_PRESSURE = "holiday_or_event_pressure"
+REASON_WEATHER_POSSIBLE_FACTOR = "weather_possible_factor"
+MOVEMENT_REASON_CODES = frozenset(
+    {
+        REASON_MARKET_FIRMING,
+        REASON_MARKET_SOFTENING,
+        REASON_PROPERTY_SPECIFIC_INCREASE,
+        REASON_PROPERTY_SPECIFIC_DISCOUNT,
+        REASON_LEAD_TIME_COMPRESSION,
+        REASON_AVAILABILITY_COMPRESSION,
+        REASON_NEARBY_UNDERCUTTERS_DISCOUNTING,
+        REASON_PREMIUM_NOT_FEATURE_SUPPORTED,
+        REASON_POSSIBLE_PRICE_HEADROOM,
+        REASON_LOW_CONFIDENCE_LOW_HISTORY,
+        REASON_EXTERNAL_COVARIATES_MISSING,
+        REASON_SEARCH_DEMAND_RISING,
+        REASON_SEARCH_DEMAND_SOFTENING,
+        REASON_HOLIDAY_OR_EVENT_PRESSURE,
+        REASON_WEATHER_POSSIBLE_FACTOR,
+    }
+)
+
+ACTION_HOLD = "Hold"
+ACTION_INCREASE_TEST = "Increase test"
+ACTION_DISCOUNT_TEST = "Discount test"
+ACTION_WATCH = "Watch"
+ACTION_NO_SIGNAL = "No signal"
+MOVEMENT_ACTIONS = frozenset(
+    {
+        ACTION_HOLD,
+        ACTION_INCREASE_TEST,
+        ACTION_DISCOUNT_TEST,
+        ACTION_WATCH,
+        ACTION_NO_SIGNAL,
+    }
+)
+CONFIDENCE_HIGH = "high"
+CONFIDENCE_MEDIUM = "medium"
+CONFIDENCE_LOW = "low"
+
+MARKET_MOVE_PCT_THRESHOLD = 0.05
+PROPERTY_SPECIFIC_MOVE_PCT_THRESHOLD = 0.05
+PRICE_GAP_PCT_THRESHOLD = 0.10
+HIGH_PREMIUM_PCT_THRESHOLD = 0.20
+SEARCH_DEMAND_RISING_THRESHOLD = 65.0
+SEARCH_DEMAND_SOFTENING_THRESHOLD = 35.0
+HOT_WEATHER_TEMP_C_THRESHOLD = 32.0
+RAIN_WEATHER_MM_THRESHOLD = 5.0
+LOW_PEER_COVERAGE_THRESHOLD = 3
 
 TEMPORAL_DATE_COLUMNS = ("snapshot_date", "checkin", "checkout")
 TEMPORAL_DATETIME_COLUMNS = ("captured_at",)
@@ -747,6 +823,375 @@ def add_peer_market_context(movement: pd.DataFrame) -> pd.DataFrame:
     return out.loc[:, list(PEER_MARKET_MOVEMENT_COLUMNS)].reset_index(drop=True)
 
 
+def _is_missing(value: object) -> bool:
+    if value is None or value is pd.NA:
+        return True
+    try:
+        missing = pd.isna(value)
+    except TypeError:
+        return False
+    return bool(missing) if isinstance(missing, bool) else False
+
+
+def _as_float(value: object) -> float | None:
+    if _is_missing(value):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _as_int(value: object) -> int | None:
+    number = _as_float(value)
+    return None if number is None else int(number)
+
+
+def _row_get(row: pd.Series | dict[str, Any], key: str, default: object = None) -> object:
+    if isinstance(row, pd.Series):
+        return row.get(key, default)
+    return row.get(key, default)
+
+
+def _append_reason(codes: list[str], code: str) -> None:
+    if code not in codes:
+        codes.append(code)
+
+
+def _market_context_from_row(row: pd.Series | dict[str, Any]) -> dict[str, Any]:
+    change_pct = _as_float(_row_get(row, "peer_median_change_pct"))
+    current_median = _as_float(_row_get(row, "current_peer_median_price_per_night"))
+    previous_median = _as_float(_row_get(row, "previous_peer_median_price_per_night"))
+    if change_pct is None and current_median is not None and previous_median not in {None, 0.0}:
+        change_pct = (current_median - previous_median) / previous_median
+
+    peer_available = _as_int(_row_get(row, "peer_available_property_count"))
+    previous_peer_available = _as_int(_row_get(row, "previous_peer_available_property_count"))
+    availability_delta = None
+    if peer_available is not None and previous_peer_available is not None:
+        availability_delta = peer_available - previous_peer_available
+
+    if change_pct is None:
+        label = "insufficient_history"
+        score = 0.0
+    elif change_pct >= MARKET_MOVE_PCT_THRESHOLD:
+        label = "firming"
+        score = change_pct * 100.0
+    elif change_pct <= -MARKET_MOVE_PCT_THRESHOLD:
+        label = "softening"
+        score = change_pct * 100.0
+    else:
+        label = "stable"
+        score = change_pct * 100.0
+
+    if availability_delta is not None and availability_delta < 0:
+        score += min(10.0, abs(float(availability_delta)) * 2.0)
+
+    return {
+        "status": HISTORY_STATUS_READY if change_pct is not None else HISTORY_STATUS_LOW_HISTORY,
+        "market_pressure_label": label,
+        "market_pressure_score": round(max(-100.0, min(100.0, score)), 2),
+        "peer_median_change_pct": change_pct,
+        "peer_median_change_eur": _as_float(_row_get(row, "peer_median_change_eur")),
+        "current_peer_median_price_per_night": current_median,
+        "previous_peer_median_price_per_night": previous_median,
+        "peer_property_count": _as_int(_row_get(row, "peer_property_count")),
+        "peer_available_property_count": peer_available,
+        "previous_peer_available_property_count": previous_peer_available,
+        "availability_delta": availability_delta,
+    }
+
+
+def market_pressure_index(movements: pd.DataFrame) -> dict[str, Any]:
+    """Summarize the latest peer-market movement in a dashboard-ready dict.
+
+    The index is deliberately transparent: it is the peer median percent move,
+    expressed as points, with a small positive bump when peer availability has
+    compressed. It is not a demand model.
+    """
+
+    if movements.empty:
+        return {
+            "status": HISTORY_STATUS_LOW_HISTORY,
+            "market_pressure_label": "insufficient_history",
+            "market_pressure_score": 0.0,
+            "snapshot_date": None,
+            "message": "No movement rows are available.",
+        }
+
+    if "snapshot_date" not in movements:
+        raise MovementHistoryError("price movement is missing required columns: snapshot_date")
+
+    snapshot_dates = pd.to_datetime(movements["snapshot_date"], errors="coerce")
+    if snapshot_dates.isna().all():
+        raise MovementHistoryError("price movement has no valid snapshot_date values")
+    latest_snapshot = snapshot_dates.max().normalize()
+    latest_rows = movements.loc[snapshot_dates.dt.normalize().eq(latest_snapshot)]
+    if "is_subject" in latest_rows:
+        subject_rows = latest_rows.loc[latest_rows["is_subject"].astype(bool)]
+    else:
+        subject_rows = latest_rows.iloc[0:0]
+    row = (subject_rows if not subject_rows.empty else latest_rows).iloc[0]
+    context = _market_context_from_row(row)
+    context.update(
+        {
+            "snapshot_date": latest_snapshot,
+            "previous_snapshot_date": _row_get(row, "previous_snapshot_date"),
+            "subject_url": _row_get(row, "property_url"),
+            "subject_price_change_pct": _as_float(_row_get(row, "price_change_pct")),
+            "subject_price_change_eur": _as_float(_row_get(row, "price_change_eur")),
+            "price_gap_to_peer_median_pct": _as_float(
+                _row_get(row, "price_gap_to_peer_median_pct")
+            ),
+            "message": (
+                "Peer market is "
+                f"{context['market_pressure_label']} "
+                f"({context['market_pressure_score']:.1f} index points)."
+            ),
+        }
+    )
+    return context
+
+
+def _covariate_row_for_context(
+    row: pd.Series | dict[str, Any],
+    covariates: pd.DataFrame | None,
+) -> pd.Series | None:
+    if covariates is None or covariates.empty:
+        return None
+    _require_columns(covariates, DEMAND_COVARIATE_REQUIRED_COLUMNS, "demand covariates")
+    checkin = pd.to_datetime(_row_get(row, "checkin"), errors="coerce")
+    market = _row_get(row, "market")
+    if pd.isna(checkin) or _is_missing(market):
+        return None
+    checkins = pd.to_datetime(covariates["checkin"], errors="coerce").dt.normalize()
+    matches = covariates.loc[
+        checkins.eq(checkin.normalize()) & covariates["market"].astype(str).eq(str(market))
+    ]
+    if matches.empty:
+        return None
+    return matches.iloc[-1]
+
+
+def movement_confidence_flags(
+    row: pd.Series | dict[str, Any],
+    market_context: dict[str, Any] | None = None,
+    covariates: pd.DataFrame | None = None,
+) -> list[str]:
+    """Return deterministic warnings that qualify a movement action."""
+
+    context = market_context or _market_context_from_row(row)
+    flags: list[str] = []
+    if context.get("status") != HISTORY_STATUS_READY:
+        flags.append("low_history")
+    if _is_missing(_row_get(row, "previous_snapshot_date")):
+        flags.append("missing_previous_snapshot")
+    if _row_get(row, "availability_state") != MOVEMENT_STATUS_AVAILABLE:
+        flags.append("availability_not_comparable")
+    peer_count = _as_int(context.get("peer_property_count"))
+    if peer_count is None or peer_count < LOW_PEER_COVERAGE_THRESHOLD:
+        flags.append("low_peer_coverage")
+    if (
+        _as_float(context.get("current_peer_median_price_per_night")) is None
+        or _as_float(context.get("previous_peer_median_price_per_night")) is None
+    ):
+        flags.append("missing_peer_market_median")
+    if _covariate_row_for_context(row, covariates) is None:
+        flags.append(REASON_EXTERNAL_COVARIATES_MISSING)
+    return flags
+
+
+def _confidence_from_flags(flags: Iterable[str]) -> str:
+    flag_set = set(flags)
+    low_flags = {
+        "low_history",
+        "missing_previous_snapshot",
+        "availability_not_comparable",
+        "missing_peer_market_median",
+    }
+    if flag_set & low_flags:
+        return CONFIDENCE_LOW
+    medium_flags = {"low_peer_coverage", REASON_EXTERNAL_COVARIATES_MISSING}
+    if flag_set & medium_flags:
+        return CONFIDENCE_MEDIUM
+    return CONFIDENCE_HIGH
+
+
+def movement_reason_codes(
+    row: pd.Series | dict[str, Any],
+    market_context: dict[str, Any] | None = None,
+    covariates: pd.DataFrame | None = None,
+) -> list[str]:
+    """Return transparent v1 reason codes for a movement row.
+
+    Covariates only add labels; they never change the price movement math.
+    """
+
+    context = market_context or _market_context_from_row(row)
+    codes: list[str] = []
+    market_change = _as_float(context.get("peer_median_change_pct"))
+    property_change = _as_float(_row_get(row, "price_change_pct"))
+    gap_to_peer = _as_float(_row_get(row, "price_gap_to_peer_median_pct"))
+
+    if market_change is not None and market_change >= MARKET_MOVE_PCT_THRESHOLD:
+        _append_reason(codes, REASON_MARKET_FIRMING)
+    if market_change is not None and market_change <= -MARKET_MOVE_PCT_THRESHOLD:
+        _append_reason(codes, REASON_MARKET_SOFTENING)
+
+    if property_change is not None:
+        relative_change = property_change - (market_change or 0.0)
+        if (
+            property_change >= PROPERTY_SPECIFIC_MOVE_PCT_THRESHOLD
+            and relative_change >= PROPERTY_SPECIFIC_MOVE_PCT_THRESHOLD
+        ):
+            _append_reason(codes, REASON_PROPERTY_SPECIFIC_INCREASE)
+        if (
+            property_change <= -PROPERTY_SPECIFIC_MOVE_PCT_THRESHOLD
+            and relative_change <= -PROPERTY_SPECIFIC_MOVE_PCT_THRESHOLD
+        ):
+            _append_reason(codes, REASON_PROPERTY_SPECIFIC_DISCOUNT)
+
+    lead_time = _as_int(_row_get(row, "lead_time_days"))
+    previous_lead_time = _as_int(_row_get(row, "previous_lead_time_days"))
+    if lead_time is not None and previous_lead_time is not None and lead_time < previous_lead_time:
+        _append_reason(codes, REASON_LEAD_TIME_COMPRESSION)
+
+    availability_delta = _as_int(context.get("availability_delta"))
+    if availability_delta is not None and availability_delta < 0:
+        _append_reason(codes, REASON_AVAILABILITY_COMPRESSION)
+
+    if (
+        market_change is not None
+        and market_change <= -MARKET_MOVE_PCT_THRESHOLD
+        and gap_to_peer is not None
+        and gap_to_peer > PRICE_GAP_PCT_THRESHOLD
+    ):
+        _append_reason(codes, REASON_NEARBY_UNDERCUTTERS_DISCOUNTING)
+
+    if gap_to_peer is not None and gap_to_peer >= HIGH_PREMIUM_PCT_THRESHOLD:
+        _append_reason(codes, REASON_PREMIUM_NOT_FEATURE_SUPPORTED)
+    if (
+        gap_to_peer is not None
+        and gap_to_peer <= -PRICE_GAP_PCT_THRESHOLD
+        and market_change is not None
+        and market_change >= MARKET_MOVE_PCT_THRESHOLD
+    ):
+        _append_reason(codes, REASON_POSSIBLE_PRICE_HEADROOM)
+
+    covariate = _covariate_row_for_context(row, covariates)
+    if covariate is None:
+        _append_reason(codes, REASON_EXTERNAL_COVARIATES_MISSING)
+    else:
+        trends = _as_float(covariate.get("google_trends_index"))
+        if trends is not None and trends >= SEARCH_DEMAND_RISING_THRESHOLD:
+            _append_reason(codes, REASON_SEARCH_DEMAND_RISING)
+        if trends is not None and trends <= SEARCH_DEMAND_SOFTENING_THRESHOLD:
+            _append_reason(codes, REASON_SEARCH_DEMAND_SOFTENING)
+        if bool(covariate.get("holiday_flag")) or bool(covariate.get("event_flag")):
+            _append_reason(codes, REASON_HOLIDAY_OR_EVENT_PRESSURE)
+        temperature = _as_float(covariate.get("weather_temp_c"))
+        rain = _as_float(covariate.get("weather_rain_mm"))
+        if (
+            temperature is not None
+            and temperature >= HOT_WEATHER_TEMP_C_THRESHOLD
+            or rain is not None
+            and rain >= RAIN_WEATHER_MM_THRESHOLD
+        ):
+            _append_reason(codes, REASON_WEATHER_POSSIBLE_FACTOR)
+
+    flags = movement_confidence_flags(row, context, covariates)
+    confidence = _confidence_from_flags(flags)
+    if confidence == CONFIDENCE_LOW:
+        _append_reason(codes, REASON_LOW_CONFIDENCE_LOW_HISTORY)
+    return codes
+
+
+def movement_action_payload(
+    row: pd.Series | dict[str, Any],
+    market_context: dict[str, Any] | None = None,
+    covariates: pd.DataFrame | None = None,
+) -> dict[str, Any]:
+    """Return the v1 recommended action, rationale, confidence, and flags."""
+
+    context = market_context or _market_context_from_row(row)
+    codes = movement_reason_codes(row, context, covariates)
+    flags = movement_confidence_flags(row, context, covariates)
+    confidence = _confidence_from_flags(flags)
+
+    if confidence == CONFIDENCE_LOW:
+        if _row_get(row, "availability_state") != MOVEMENT_STATUS_AVAILABLE:
+            action = ACTION_NO_SIGNAL
+            rationale = "Availability or scrape status prevents a comparable price-move signal."
+        else:
+            action = ACTION_WATCH
+            rationale = "Movement history or peer coverage is too thin for a price test."
+    elif (
+        REASON_NEARBY_UNDERCUTTERS_DISCOUNTING in codes
+        or REASON_PREMIUM_NOT_FEATURE_SUPPORTED in codes
+    ):
+        action = ACTION_DISCOUNT_TEST
+        rationale = "Peers are softening or undercutting while the subject sits above peer median."
+    elif (
+        REASON_POSSIBLE_PRICE_HEADROOM in codes
+        and REASON_PROPERTY_SPECIFIC_INCREASE not in codes
+    ):
+        action = ACTION_INCREASE_TEST
+        rationale = "The subject is below comparable peer median while peer-market prices are firming."
+    elif (
+        REASON_MARKET_FIRMING in codes
+        or REASON_SEARCH_DEMAND_RISING in codes
+        or REASON_HOLIDAY_OR_EVENT_PRESSURE in codes
+    ):
+        action = ACTION_HOLD
+        rationale = "Market context is supportive but does not show clear incremental price headroom."
+    elif REASON_MARKET_SOFTENING in codes or REASON_SEARCH_DEMAND_SOFTENING in codes:
+        action = ACTION_WATCH
+        rationale = "Peer-market context is softening; wait for a clearer discount signal."
+    else:
+        action = ACTION_NO_SIGNAL
+        rationale = "No deterministic movement rule crossed its action threshold."
+
+    return {
+        "recommended_action": action,
+        "rationale": rationale,
+        "confidence": confidence,
+        "confidence_flags": flags,
+        "reason_codes": codes,
+        "market_pressure_label": context["market_pressure_label"],
+        "market_pressure_score": context["market_pressure_score"],
+    }
+
+
+def add_movement_signals(
+    movement: pd.DataFrame,
+    covariates: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Add reason codes and action payload columns to peer movement rows."""
+
+    if movement.empty:
+        empty = movement.copy()
+        for column in MOVEMENT_SIGNAL_COLUMNS:
+            empty[column] = pd.Series(dtype="object")
+        empty.attrs.update(movement.attrs)
+        return empty
+
+    out = movement.copy()
+    payloads = [
+        movement_action_payload(row, _market_context_from_row(row), covariates)
+        for _, row in out.iterrows()
+    ]
+    for column in MOVEMENT_SIGNAL_COLUMNS:
+        out[column] = [payload[column] for payload in payloads]
+
+    out.attrs.update(movement.attrs)
+    columns = (
+        list(SIGNALLED_PEER_MARKET_MOVEMENT_COLUMNS)
+        if set(PEER_MARKET_MOVEMENT_COLUMNS).issubset(out.columns)
+        else list(out.columns)
+    )
+    return out.loc[:, columns].reset_index(drop=True)
+
+
 def build_peer_market_movement_table(
     observations: pd.DataFrame,
     presence: pd.DataFrame,
@@ -759,6 +1204,7 @@ def build_peer_market_movement_table(
     w_sim: float = 0.5,
     max_distance_km: float = 8.0,
     include_guest_house: bool = False,
+    covariates: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Build movement rows with comparable-peer market medians and rank changes."""
 
@@ -780,6 +1226,7 @@ def build_peer_market_movement_table(
         peer_property_urls=peer_property_urls,
     )
     enriched = add_peer_market_context(movement)
+    enriched = add_movement_signals(enriched, covariates)
     enriched.attrs.update(movement.attrs)
     enriched.attrs["peer_property_urls"] = peer_property_urls
     enriched.attrs["peer_count"] = len(peer_property_urls)
