@@ -6,8 +6,11 @@ from pathlib import Path
 import pandas as pd
 
 from scripts.append_price_observations import (
+    append_history_from_run,
+    append_offer_presence,
     append_price_observations,
     append_price_observations_from_run,
+    build_offer_presence_from_run,
     build_price_observations_from_run,
 )
 from tourism_pricing_analytics.analysis.movement import (
@@ -113,6 +116,56 @@ def create_synthetic_run(run_dir: Path, *, captured_at: str, price: float) -> No
                 "property_type": "Apartment",
                 "latitude": 35.515,
                 "longitude": 24.018,
+            }
+        ],
+    )
+    write_jsonl(run_dir / "failures.jsonl", [])
+
+
+def create_failure_run(
+    run_dir: Path,
+    *,
+    captured_at: str,
+    category: str,
+    reason: str = "Synthetic failure.",
+) -> None:
+    run_dir.mkdir(parents=True)
+    write_jsonl(run_dir / "price_rows.jsonl", [])
+    write_jsonl(run_dir / "room_features.jsonl", [])
+    write_jsonl(run_dir / "room_inventory.jsonl", [])
+    write_jsonl(
+        run_dir / "property_features.jsonl",
+        [
+            {
+                "property_name": "Apartment One",
+                "property_url": "https://example.test/apartment-one",
+                "captured_at": captured_at,
+                "property_type": "Apartment",
+                "latitude": 35.515,
+                "longitude": 24.018,
+            }
+        ],
+    )
+    write_jsonl(
+        run_dir / "failures.jsonl",
+        [
+            {
+                "property_name": "Apartment One",
+                "property_url": "https://example.test/apartment-one",
+                "scrape_stage": "price_rows",
+                "category": category,
+                "reason": reason,
+                "requested_url": "https://example.test/apartment-one?checkin=2026-07-15",
+                "final_url": "https://example.test/apartment-one",
+                "checkin": "2026-07-15",
+                "checkout": "2026-07-19",
+                "lead_time_days": 15,
+                "stay_length_days": 4,
+                "status_code": 200,
+                "snapshot_filename": None,
+                "exception_type": None,
+                "exception_message": None,
+                "captured_at": captured_at,
             }
         ],
     )
@@ -321,6 +374,156 @@ class AppendPriceObservationsTests(unittest.TestCase):
             [pd.Timestamp("2026-06-30"), pd.Timestamp("2026-07-01")],
         )
         self.assertEqual(list(appended["price_per_night"]), [125.0, 135.0])
+
+
+class AppendOfferPresenceTests(unittest.TestCase):
+    def test_build_presence_from_available_run_collapses_price_rows_to_window(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "20260630_091500_000000"
+            create_synthetic_run(run_dir, captured_at="2026-06-30T09:15:00", price=500.0)
+
+            frame = build_offer_presence_from_run(run_dir)
+
+        self.assertEqual(list(frame.columns), list(OFFER_PRESENCE_COLUMNS))
+        self.assertEqual(frame.shape, (1, len(OFFER_PRESENCE_COLUMNS)))
+        self.assertEqual(frame.loc[0, "availability_status"], AVAILABILITY_STATUS_AVAILABLE)
+        self.assertIsNone(frame.loc[0, "failure_reason"])
+        self.assertEqual(frame.loc[0, "property_type"], "Apartment")
+        self.assertEqual(frame.loc[0, "snapshot_date"], pd.Timestamp("2026-06-30"))
+
+    def test_build_presence_maps_empty_availability_failure_to_no_offer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "20260630_091500_000000"
+            create_failure_run(
+                run_dir,
+                captured_at="2026-06-30T09:15:00",
+                category="empty_availability",
+                reason="No rooms available for this search.",
+            )
+
+            frame = build_offer_presence_from_run(run_dir)
+
+        self.assertEqual(frame.shape, (1, len(OFFER_PRESENCE_COLUMNS)))
+        self.assertEqual(frame.loc[0, "availability_status"], AVAILABILITY_STATUS_NO_OFFER)
+        self.assertEqual(frame.loc[0, "failure_reason"], "No rooms available for this search.")
+
+    def test_build_presence_maps_other_price_failures_to_scrape_failed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "20260630_091500_000000"
+            create_failure_run(
+                run_dir,
+                captured_at="2026-06-30T09:15:00",
+                category="selector_drift",
+                reason="Price table selector changed.",
+            )
+
+            frame = build_offer_presence_from_run(run_dir)
+
+        self.assertEqual(frame.loc[0, "availability_status"], AVAILABILITY_STATUS_FAILED)
+        self.assertEqual(frame.loc[0, "failure_reason"], "Price table selector changed.")
+
+    def test_build_presence_does_not_infer_missing_windows_from_absent_prices(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "20260630_091500_000000"
+            create_synthetic_run(run_dir, captured_at="2026-06-30T09:15:00", price=500.0)
+
+            frame = build_offer_presence_from_run(run_dir)
+
+        self.assertEqual(len(frame), 1)
+        self.assertEqual(set(frame["lead_time_days"]), {15})
+        self.assertEqual(set(frame["stay_length_days"]), {4})
+
+    def test_build_presence_prefers_available_over_duplicate_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "20260630_091500_000000"
+            create_synthetic_run(run_dir, captured_at="2026-06-30T09:15:00", price=500.0)
+            write_jsonl(
+                run_dir / "failures.jsonl",
+                [
+                    {
+                        "property_name": "Apartment One",
+                        "property_url": "https://example.test/apartment-one",
+                        "scrape_stage": "price_rows",
+                        "category": "selector_drift",
+                        "reason": "Should not override the available price rows.",
+                        "requested_url": "https://example.test/apartment-one?checkin=2026-07-15",
+                        "final_url": "https://example.test/apartment-one",
+                        "checkin": "2026-07-15",
+                        "checkout": "2026-07-19",
+                        "lead_time_days": 15,
+                        "stay_length_days": 4,
+                        "status_code": 200,
+                        "snapshot_filename": None,
+                        "exception_type": None,
+                        "exception_message": None,
+                        "captured_at": "2026-06-30T09:16:00",
+                    }
+                ],
+            )
+
+            frame = build_offer_presence_from_run(run_dir)
+
+        self.assertEqual(len(frame), 1)
+        self.assertEqual(frame.loc[0, "availability_status"], AVAILABILITY_STATUS_AVAILABLE)
+
+    def test_append_offer_presence_writes_parquet_and_dedupes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = Path(tmp) / "offer_presence.parquet"
+            frame = pd.DataFrame([sample_offer_presence()])
+
+            first = append_offer_presence(frame, out_path)
+            second = append_offer_presence(frame, out_path)
+            round_tripped = pd.read_parquet(out_path)
+
+        self.assertEqual(len(first), 1)
+        self.assertEqual(len(second), 1)
+        self.assertEqual(round_tripped.shape, (1, len(OFFER_PRESENCE_COLUMNS)))
+
+    def test_append_history_from_run_writes_observations_and_presence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            run_dir = tmp_path / "20260630_091500_000000"
+            observations_out = tmp_path / "price_observations.parquet"
+            presence_out = tmp_path / "offer_presence.parquet"
+            create_synthetic_run(run_dir, captured_at="2026-06-30T09:15:00", price=500.0)
+
+            observations, presence = append_history_from_run(
+                run_dir,
+                observations_out,
+                presence_out,
+            )
+            observation_rows = pd.read_parquet(observations_out).shape[0]
+            presence_rows = pd.read_parquet(presence_out).shape[0]
+
+        self.assertEqual(len(observations), 1)
+        self.assertEqual(len(presence), 1)
+        self.assertEqual(observation_rows, 1)
+        self.assertEqual(presence_rows, 1)
+
+    def test_append_history_from_failure_only_run_records_presence_without_prices(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            run_dir = tmp_path / "20260630_091500_000000"
+            observations_out = tmp_path / "price_observations.parquet"
+            presence_out = tmp_path / "offer_presence.parquet"
+            create_failure_run(
+                run_dir,
+                captured_at="2026-06-30T09:15:00",
+                category="empty_availability",
+            )
+
+            observations, presence = append_history_from_run(
+                run_dir,
+                observations_out,
+                presence_out,
+            )
+            observation_rows = pd.read_parquet(observations_out).shape[0]
+            status = pd.read_parquet(presence_out).loc[0, "availability_status"]
+
+        self.assertEqual(len(observations), 0)
+        self.assertEqual(len(presence), 1)
+        self.assertEqual(observation_rows, 0)
+        self.assertEqual(status, AVAILABILITY_STATUS_NO_OFFER)
 
 
 if __name__ == "__main__":
