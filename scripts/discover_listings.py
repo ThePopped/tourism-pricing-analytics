@@ -120,10 +120,15 @@ def main() -> None:
             browser.close()
 
     write_candidates(candidates, args.out)
+    resolved_out = args.out.resolve()
+    try:
+        display_out = resolved_out.relative_to(PROJECT_ROOT)
+    except ValueError:
+        display_out = resolved_out
     print(f"Areas searched: {len(areas)}")
     print(f"Excluded already-configured URLs: {len(exclude_urls)}")
     print(f"Discovered {len(candidates)} new candidate properties")
-    print(f"Wrote {args.out.relative_to(PROJECT_ROOT)}")
+    print(f"Wrote {display_out}")
 
 
 if __name__ == "__main__":
