@@ -35,6 +35,8 @@ DEFAULT_PRESENCE_OUT = REPO_ROOT / "data" / "modelling" / "offer_presence.parque
 def find_latest_run_dir(runs_root: Path) -> Path:
     """Return the most recent timestamped run dir that has price rows."""
 
+    if not runs_root.exists():
+        raise FileNotFoundError(f"Runs root does not exist: {runs_root}")
     candidates = [
         path
         for path in runs_root.iterdir()
@@ -430,11 +432,23 @@ def append_history_from_run(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument(
+        "--latest",
+        action="store_true",
+        help="Append the latest run under --runs-root.",
+    )
+    source.add_argument(
         "--run-dir",
         type=Path,
         default=None,
         help="Run directory to append (defaults to latest under saved_dom/runs/).",
+    )
+    parser.add_argument(
+        "--runs-root",
+        type=Path,
+        default=DEFAULT_RUNS_ROOT,
+        help=f"Root containing scrape run directories (default: {DEFAULT_RUNS_ROOT}).",
     )
     parser.add_argument(
         "--observations-out",
@@ -455,7 +469,7 @@ def main() -> None:
     parser.add_argument("--market", default="Chania")
     args = parser.parse_args()
 
-    run_dir = args.run_dir or find_latest_run_dir(DEFAULT_RUNS_ROOT)
+    run_dir = args.run_dir or find_latest_run_dir(args.runs_root)
     observations, presence = append_history_from_run(
         run_dir,
         args.observations_out,

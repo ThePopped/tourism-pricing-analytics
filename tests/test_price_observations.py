@@ -1,6 +1,9 @@
 import json
+import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 
 import pandas as pd
@@ -12,6 +15,8 @@ from scripts.append_price_observations import (
     append_price_observations_from_run,
     build_offer_presence_from_run,
     build_price_observations_from_run,
+    find_latest_run_dir,
+    main as append_history_main,
 )
 from tourism_pricing_analytics.analysis.movement import (
     AVAILABILITY_STATUS_AVAILABLE,
@@ -305,6 +310,20 @@ class OfferPresenceContractTests(unittest.TestCase):
 
 
 class AppendPriceObservationsTests(unittest.TestCase):
+    def test_find_latest_run_dir_uses_newest_timestamped_run_with_price_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runs_root = Path(tmp)
+            older = runs_root / "20260630_091500_000000"
+            newer = runs_root / "20260701_091500_000000"
+            ignored = runs_root / "20260702_091500_000000"
+            create_synthetic_run(older, captured_at="2026-06-30T09:15:00", price=500.0)
+            create_synthetic_run(newer, captured_at="2026-07-01T09:15:00", price=540.0)
+            ignored.mkdir()
+
+            latest = find_latest_run_dir(runs_root)
+
+        self.assertEqual(latest.name, "20260701_091500_000000")
+
     def test_build_observations_from_synthetic_run_uses_feature_pipeline(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp) / "20260630_091500_000000"
@@ -374,6 +393,41 @@ class AppendPriceObservationsTests(unittest.TestCase):
             [pd.Timestamp("2026-06-30"), pd.Timestamp("2026-07-01")],
         )
         self.assertEqual(list(appended["price_per_night"]), [125.0, 135.0])
+
+    def test_cli_latest_appends_newest_run_without_manual_run_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            runs_root = tmp_path / "runs"
+            older = runs_root / "20260630_091500_000000"
+            newer = runs_root / "20260701_091500_000000"
+            observations_out = tmp_path / "price_observations.parquet"
+            presence_out = tmp_path / "offer_presence.parquet"
+            create_synthetic_run(older, captured_at="2026-06-30T09:15:00", price=500.0)
+            create_synthetic_run(newer, captured_at="2026-07-01T09:15:00", price=540.0)
+
+            old_argv = sys.argv
+            sys.argv = [
+                "append_price_observations.py",
+                "--latest",
+                "--runs-root",
+                str(runs_root),
+                "--observations-out",
+                str(observations_out),
+                "--presence-out",
+                str(presence_out),
+            ]
+            try:
+                with redirect_stdout(StringIO()):
+                    append_history_main()
+            finally:
+                sys.argv = old_argv
+
+            observations = pd.read_parquet(observations_out)
+            presence = pd.read_parquet(presence_out)
+
+        self.assertEqual(observations.shape[0], 1)
+        self.assertEqual(presence.shape[0], 1)
+        self.assertEqual(observations.loc[0, "run_id"], "20260701_091500_000000")
 
 
 class AppendOfferPresenceTests(unittest.TestCase):
