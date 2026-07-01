@@ -1,8 +1,19 @@
 import json
+import threading
 import unittest
+from http.server import ThreadingHTTPServer
+from urllib.request import urlopen
 
-from scripts.run_dashboard import DashboardService
+import pandas as pd
+
+from scripts.run_dashboard import DashboardService, _make_handler
+from tests.test_price_observations import sample_offer_presence, sample_price_observation
 from tests.test_hedonic import sample_hedonic_frame
+from tourism_pricing_analytics.analysis.movement import (
+    DEMAND_COVARIATE_COLUMNS,
+    OFFER_PRESENCE_COLUMNS,
+    PRICE_OBSERVATION_COLUMNS,
+)
 from tourism_pricing_analytics.analysis.dashboard import (
     render_index_html,
     shape_dashboard_payload,
@@ -83,7 +94,7 @@ class RenderIndexTests(unittest.TestCase):
 class DashboardServiceTests(unittest.TestCase):
     def test_service_fits_once_and_answers_benchmarks(self) -> None:
         frame = sample_hedonic_frame()
-        service = DashboardService(frame, source_table="synthetic.parquet", min_token_frequency=1)
+        service = _dashboard_service_without_history(frame)
 
         meta = service.meta()
         self.assertEqual(meta["default_subject_url"], service.catalog[0]["property_url"])
@@ -105,7 +116,7 @@ class DashboardServiceTests(unittest.TestCase):
 
     def test_benchmark_defaults_to_first_catalog_subject(self) -> None:
         frame = sample_hedonic_frame()
-        service = DashboardService(frame, source_table="synthetic.parquet", min_token_frequency=1)
+        service = _dashboard_service_without_history(frame)
         payload = service.benchmark(
             subject_url=None,
             lead_time_days=None,
@@ -115,6 +126,210 @@ class DashboardServiceTests(unittest.TestCase):
             max_distance_km=25.0,
         )
         self.assertEqual(payload["client"]["property_url"], service.catalog[0]["property_url"])
+
+    def test_movements_payload_is_json_safe_and_preserves_previous_snapshot(self) -> None:
+        service = DashboardService(
+            sample_hedonic_frame(),
+            source_table="synthetic.parquet",
+            min_token_frequency=1,
+            observations=_movement_observations_for_dashboard(),
+            presence=_movement_presence_for_dashboard(),
+            covariates=_covariates_for_dashboard(),
+        )
+
+        payload = service.movements(
+            subject_url="subject",
+            lead_time_days=1,
+            stay_length_days=4,
+            season="Peak",
+            max_peers=2,
+            max_distance_km=25.0,
+        )
+
+        self.assertEqual(payload["query"]["subject_url"], "subject")
+        self.assertFalse(payload["history"]["is_low_history"])
+        self.assertEqual(payload["subject_movement"]["property_url"], "subject")
+        self.assertEqual(payload["subject_movement"]["previous_snapshot_date"], "2026-06-29")
+        self.assertEqual(len(payload["peer_movements"]), 2)
+        self.assertIn("market_pressure_label", payload["market_pressure"])
+        self.assertIn("recommended_action", payload["action_payload"])
+        self.assertIn("reason_codes", payload)
+        self.assertEqual(len(payload["timeline"]), 1)
+        json.dumps(payload, allow_nan=False)
+
+    def test_movements_endpoint_returns_json_payload(self) -> None:
+        service = DashboardService(
+            sample_hedonic_frame(),
+            source_table="synthetic.parquet",
+            min_token_frequency=1,
+            observations=_movement_observations_for_dashboard(),
+            presence=_movement_presence_for_dashboard(),
+            covariates=_covariates_for_dashboard(),
+        )
+        handler = _make_handler(service)
+        server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            host, port = server.server_address
+            with urlopen(
+                f"http://{host}:{port}/api/movements?"
+                "subject_url=subject&lead_time_days=1&stay_length_days=4&season=Peak&max_peers=2",
+                timeout=5,
+            ) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+        self.assertEqual(payload["subject_movement"]["property_url"], "subject")
+        self.assertEqual(payload["status"], "ready")
+        json.dumps(payload, allow_nan=False)
+
+
+def _movement_observation_for_dashboard(
+    property_url: str,
+    property_name: str,
+    snapshot_date: str,
+    price_per_night: float,
+    latitude: float,
+    longitude: float,
+) -> dict[str, object]:
+    snapshot = pd.Timestamp(snapshot_date)
+    checkin = pd.Timestamp("2026-07-01")
+    return sample_price_observation(
+        snapshot_date=snapshot_date,
+        captured_at=f"{snapshot_date}T09:15:00",
+        run_id=f"{snapshot.strftime('%Y%m%d')}_091500_000000",
+        property_url=property_url,
+        property_name=property_name,
+        room_id=f"{property_url}-room",
+        room_name="Dashboard Test Room",
+        block_id=f"{property_url}-2026-07-01-2026-07-05",
+        checkin="2026-07-01",
+        checkout="2026-07-05",
+        lead_time_days=(checkin - snapshot).days,
+        stay_length_days=4,
+        price_per_night=price_per_night,
+        current_price_value=price_per_night * 4,
+        latitude=latitude,
+        longitude=longitude,
+    )
+
+
+def _movement_presence_for_dashboard_row(
+    property_url: str,
+    property_name: str,
+    snapshot_date: str,
+    latitude: float,
+    longitude: float,
+) -> dict[str, object]:
+    snapshot = pd.Timestamp(snapshot_date)
+    checkin = pd.Timestamp("2026-07-01")
+    return sample_offer_presence(
+        snapshot_date=snapshot_date,
+        captured_at=f"{snapshot_date}T09:15:00",
+        run_id=f"{snapshot.strftime('%Y%m%d')}_091500_000000",
+        property_url=property_url,
+        property_name=property_name,
+        checkin="2026-07-01",
+        checkout="2026-07-05",
+        lead_time_days=(checkin - snapshot).days,
+        stay_length_days=4,
+        latitude=latitude,
+        longitude=longitude,
+    )
+
+
+def _movement_observations_for_dashboard() -> pd.DataFrame:
+    specs = [
+        ("subject", "Subject Stay", 35.500, 24.000, 100.0, 105.0),
+        ("near", "Near Peer", 35.501, 24.001, 120.0, 130.0),
+        ("middle", "Middle Peer", 35.520, 24.000, 150.0, 165.0),
+    ]
+    rows: list[dict[str, object]] = []
+    for property_url, property_name, latitude, longitude, old_price, new_price in specs:
+        rows.append(
+            _movement_observation_for_dashboard(
+                property_url,
+                property_name,
+                "2026-06-29",
+                old_price,
+                latitude,
+                longitude,
+            )
+        )
+        rows.append(
+            _movement_observation_for_dashboard(
+                property_url,
+                property_name,
+                "2026-06-30",
+                new_price,
+                latitude,
+                longitude,
+            )
+        )
+    return pd.DataFrame(rows, columns=PRICE_OBSERVATION_COLUMNS)
+
+
+def _movement_presence_for_dashboard() -> pd.DataFrame:
+    specs = [
+        ("subject", "Subject Stay", 35.500, 24.000),
+        ("near", "Near Peer", 35.501, 24.001),
+        ("middle", "Middle Peer", 35.520, 24.000),
+    ]
+    rows: list[dict[str, object]] = []
+    for property_url, property_name, latitude, longitude in specs:
+        rows.append(
+            _movement_presence_for_dashboard_row(
+                property_url,
+                property_name,
+                "2026-06-29",
+                latitude,
+                longitude,
+            )
+        )
+        rows.append(
+            _movement_presence_for_dashboard_row(
+                property_url,
+                property_name,
+                "2026-06-30",
+                latitude,
+                longitude,
+            )
+        )
+    return pd.DataFrame(rows, columns=OFFER_PRESENCE_COLUMNS)
+
+
+def _covariates_for_dashboard() -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "date": "2026-06-30",
+                "checkin": "2026-07-01",
+                "market": "Chania",
+                "google_trends_index": 72,
+                "holiday_flag": False,
+                "event_flag": True,
+                "weather_temp_c": 30.0,
+                "weather_rain_mm": 0.0,
+                "notes": "Synthetic dashboard test context.",
+            }
+        ],
+        columns=DEMAND_COVARIATE_COLUMNS,
+    )
+
+
+def _dashboard_service_without_history(frame: pd.DataFrame) -> DashboardService:
+    return DashboardService(
+        frame,
+        source_table="synthetic.parquet",
+        min_token_frequency=1,
+        observations=pd.DataFrame(columns=PRICE_OBSERVATION_COLUMNS),
+        presence=pd.DataFrame(columns=OFFER_PRESENCE_COLUMNS),
+        covariates=pd.DataFrame(columns=DEMAND_COVARIATE_COLUMNS),
+    )
 
 
 if __name__ == "__main__":
