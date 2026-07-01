@@ -69,3 +69,69 @@ Nested fields are JSON-encoded strings in Parquet for deterministic round trips:
 
 Downstream loaders should decode those columns before feature engineering that
 needs list or dictionary structure.
+
+## Movement History
+
+Local generated history stores back the dashboard's Price Movements tab
+(`/api/movements`):
+
+- `price_observations.parquet`: append-only available rate-offer observations by
+  snapshot.
+- `offer_presence.parquet`: append-only searched property/window presence rows,
+  including availability and scrape status.
+- `demand_covariates.csv`: optional manually maintained external context joined
+  by `checkin` and `market`. When absent, the dashboard reports
+  `No external covariates loaded.` and covariates act as context labels only.
+
+Both Parquet stores are generated operating history and are git-ignored; only
+this documentation (and any small fixtures) is promoted to the repository.
+Rebuild them locally from scrape runs under `saved_dom/runs/`.
+
+### Rebuild command
+
+Append one run to the default stores
+(`data/modelling/price_observations.parquet` and
+`data/modelling/offer_presence.parquet`):
+
+```powershell
+.\.venv\Scripts\python.exe scripts\append_price_observations.py --run-dir saved_dom\runs\20260629_180820_565010
+```
+
+Use `--latest` to append the most recent run automatically, or
+`--observations-out` / `--presence-out` to target alternate paths. The append is
+idempotent: rows dedupe by snapshot/property/window/occupancy identity (plus
+`room_id`/`block_id` for observations), so re-running a run is safe.
+
+### Validation (2026-07-01)
+
+Appending the local runs surfaced a data-quality gate in
+`normalize_price_observations`: runs with non-numeric `latitude`/`longitude`
+(the `20260603`-`20260621_185648` batch) or null `room_id`
+(`20260622_105842`, `20260623_222416`) are rejected rather than written. Four
+runs appended cleanly:
+
+- `20260621_213828_860429`, `20260621_220852_666082` (snapshot `2026-06-21`)
+- `20260622_092716_253958` (snapshot `2026-06-22`)
+- `20260629_180820_565010` (snapshot `2026-06-29`)
+
+Resulting store shapes:
+
+- `price_observations.parquet`: 2,282 rows x 22 columns, 77 properties across
+  the three snapshot dates.
+- `offer_presence.parquet`: 1,950 rows x 19 columns (`available` 513,
+  `no_available_offer` 1,437).
+
+These runs used lead-time-relative checkin windows, so absolute stay dates
+mostly differ across snapshots; comparable cross-snapshot movement concentrates
+on the `2026-07-06` checkin shared by the `2026-06-22` and `2026-06-29`
+snapshots. This is expected until a fixed-window daily cadence lands, and the
+movement table degrades to the `unknown` availability state (rendered as the
+low-history dashboard case) where no comparable previous snapshot exists.
+
+Sample `/api/movements` result for subject
+`samonas-orange-villa-diktamos` (stay 4, lead time 7) over that overlap:
+market pressure **firming (+38.2 index points)**, subject offer **available at
+EUR 206.75/night, down 12.0%** from EUR 235.00, recommended action
+**Increase test** (medium confidence) with reason codes `market_firming`,
+`property_specific_discount`, `lead_time_compression`, `possible_price_headroom`,
+and `external_covariates_missing`. The payload is JSON-safe (`allow_nan=False`).

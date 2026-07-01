@@ -13,3 +13,8 @@ saved_dom/
 # Full region-listing dump kept local-only for notebook exploration; tests use
 # the small data/sample/raw_html/listings_chania_sample.html instead.
 data/sample/raw_html/listings_chania.html
+
+# Generated movement-history stores: append-only operating history rebuilt from
+# local scrape runs, not committed fixtures. See data/modelling/README.md.
+data/modelling/price_observations.parquet
+data/modelling/offer_presence.parquet
