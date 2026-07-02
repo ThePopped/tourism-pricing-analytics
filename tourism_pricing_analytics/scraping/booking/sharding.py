@@ -73,6 +73,23 @@ def pending_indexed_targets(
     ]
 
 
+def next_round_targets(
+    pending: list[IndexedTarget],
+    attempted_urls: set[str],
+    capacity: int,
+) -> list[IndexedTarget]:
+    """Return pending targets not yet attempted this invocation, capped at capacity.
+
+    ``capacity <= 0`` means no cap. Pending order is preserved so rounds walk
+    the config in the same order as a single-pass run.
+    """
+
+    remaining = [item for item in pending if item.target.url not in attempted_urls]
+    if capacity <= 0:
+        return remaining
+    return remaining[:capacity]
+
+
 def split_indexed_targets(
     targets: list[IndexedTarget],
     worker_count: int,

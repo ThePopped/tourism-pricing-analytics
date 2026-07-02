@@ -8,6 +8,7 @@ from tourism_pricing_analytics.scraping.booking.models import PropertyTarget
 from tourism_pricing_analytics.scraping.booking.sharding import (
     aggregate_run_artifacts,
     indexed_targets,
+    next_round_targets,
     pending_indexed_targets,
     split_indexed_targets,
 )
@@ -80,6 +81,41 @@ class ShardedScrapeDriverTests(unittest.TestCase):
     def test_split_indexed_targets_rejects_invalid_worker_count(self) -> None:
         with self.assertRaises(ValueError):
             split_indexed_targets([], 0)
+
+    def test_next_round_targets_excludes_attempted_urls(self) -> None:
+        targets = indexed_targets([_target(index) for index in range(1, 4)])
+        attempted = {targets[0].target.url, targets[2].target.url}
+
+        result = next_round_targets(targets, attempted, 10)
+
+        self.assertEqual([item.index for item in result], [2])
+
+    def test_next_round_targets_respects_capacity(self) -> None:
+        targets = indexed_targets([_target(index) for index in range(1, 6)])
+
+        result = next_round_targets(targets, set(), 2)
+
+        self.assertEqual([item.index for item in result], [1, 2])
+
+    def test_next_round_targets_nonpositive_capacity_returns_all(self) -> None:
+        targets = indexed_targets([_target(index) for index in range(1, 4)])
+
+        self.assertEqual(next_round_targets(targets, set(), 0), targets)
+        self.assertEqual(next_round_targets(targets, set(), -1), targets)
+
+    def test_next_round_targets_empty_when_all_pending_attempted(self) -> None:
+        targets = indexed_targets([_target(1), _target(2)])
+        attempted = {item.target.url for item in targets}
+
+        self.assertEqual(next_round_targets(targets, attempted, 10), [])
+
+    def test_next_round_targets_preserves_pending_order(self) -> None:
+        targets = indexed_targets([_target(index) for index in range(1, 6)])
+        attempted = {targets[1].target.url}
+
+        result = next_round_targets(targets, attempted, 3)
+
+        self.assertEqual([item.index for item in result], [1, 3, 4])
 
     def test_pending_indexed_targets_uses_full_config_indexes_for_resume(self) -> None:
         targets = indexed_targets([_target(1), _target(2), _target(3)])
