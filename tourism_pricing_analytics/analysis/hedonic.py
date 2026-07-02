@@ -16,6 +16,10 @@ from sklearn.model_selection import GroupKFold
 
 from tourism_pricing_analytics.analysis.segment import segment_self_catering
 from tourism_pricing_analytics.features.encoders import normalize_amenity
+from tourism_pricing_analytics.features.geo import (
+    GEO_DISTANCE_FEATURES,
+    add_location_features,
+)
 
 RANDOM_SEED = 10001
 
@@ -281,6 +285,8 @@ def _prepare_feature_frame(frame: pd.DataFrame) -> pd.DataFrame:
         out["nearest_poi_km"] = np.nan
         out["nearby_poi_count"] = 0
 
+    out = add_location_features(out)
+
     subscore_keys: set[str] = set()
     if "review_subscores" in out:
         for value in out["review_subscores"].tolist():
@@ -327,6 +333,7 @@ def _fit_feature_meta(
         *WINDOW_NUMERIC_FEATURES,
         *ORDINAL_FEATURES,
         *subscore_features,
+        *GEO_DISTANCE_FEATURES,
         *RAW_GEO_FEATURES,
     )
 
