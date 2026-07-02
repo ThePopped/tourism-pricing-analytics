@@ -4,6 +4,8 @@ Tourism Pricing Analytics is a pricing-intelligence project for tourism properti
 
 The current implementation focus is Booking.com ingestion. The scraper collects a stable room inventory and dated rate rows for configured properties, preserves raw and normalized price fields, classifies failures explicitly, and writes structured JSONL output for downstream analytics.
 
+A first downstream analytics phase is also built on top of a completed scrape: a competitive-positioning benchmark and a supporting hedonic adjustment/explanation layer for a Chania self-catering operator. See the [Analytics](#analytics-post-scraping-modelling) section below.
+
 ## Project Goals
 
 The project is designed around one main objective:
@@ -23,21 +25,35 @@ That objective breaks down into these stages:
 
 ## Current Status
 
-The repository is in the scraper-hardening phase.
+The scraper is production-scale and the first downstream analytics phases are
+built. The operational focus is now **accumulating repeated daily scrapes** so
+the competitor price-movement layer gains history.
 
 Completed so far:
 
-- Booking.com scraper configuration lives in `config/booking_scraper_config.json`.
-- Reusable scraper logic has moved into `tourism_pricing_analytics/scraping/booking/`.
-- `notebooks/property_page_scraper.py` remains as a thin manual entrypoint.
-- Unit and fixture tests cover URL construction, config loading, price parsing, parser behavior, failure classification, and runner failure recording.
-- Scraper output is written as JSONL under `saved_dom/runs/<timestamp>/`.
-- Failure cases are classified into machine-readable categories and saved in `failures.jsonl`.
-- Small representative HTML fixtures live under `data/sample/raw_html/`.
+- Booking.com scraper configuration lives in `config/booking_scraper_config.json`
+  and targets ~116 Chania properties across five lead times and three stay
+  lengths.
+- Reusable scraper logic lives in `tourism_pricing_analytics/scraping/booking/`;
+  `notebooks/property_page_scraper.py` remains a thin manual entrypoint.
+- Structured run-output validation writes a `validation_report.json` per run, and
+  each run builds a `modelling_table.jsonl` via the Layer 2 feature join.
+- A downstream analytics layer (`tourism_pricing_analytics/analysis/`) delivers a
+  comparables-first competitive-positioning benchmark and a supporting hedonic
+  adjustment/explanation model, exposed through reports, an Excel workbook, a
+  positioning narrative, and a local dashboard. See the
+  [Analytics](#analytics-post-scraping-modelling) section.
+- **Phase 4 competitor price-movement monitoring** (roadmap Phases 0-4 complete):
+  append-only movement-history stores, snapshot comparison, property-weighted
+  peer-market movement, transparent/deterministic pricing signals, an
+  `/api/movements` service route, and a compact **Price Movements** dashboard tab.
+- Unit, fixture, and analytics tests cover the scraper, feature pipeline, and the
+  movement/dashboard layers.
 
-Next major engineering step:
+Current operational step:
 
-- Add structured run-output validation helpers for generated JSONL run directories, with tests for required files, duplicate room records, missing fields, impossible prices, per-night calculations, and failure snapshot references.
+- Run the daily scrape and append its snapshot to the movement-history stores so
+  movement comparisons accumulate (see [Repeated-Scrape Workflow](#repeated-scrape-workflow)).
 
 ## Repository Layout
 
@@ -144,11 +160,13 @@ Current configured defaults:
 - Output root: `saved_dom`
 - Lead times: `1`, `7`, `14`, `30`, and `60` days
 - Stay lengths: `4`, `7`, and `14` nights
-- Occupancy: `2` adults, `0` children, `1` room
+- Occupancy: `2` adults, `0` children, `1` room (all prices are 2-guest nightly
+  rates; whole-villa / large-party pricing is under-served pending a future
+  varied-occupancy re-scrape)
 - Browser: Playwright Chromium, currently configured as non-headless
-- Configured properties:
-  - Solimar Aquamarine Resort
-  - Elia Daliani
+- Configured properties: ~116 Chania/Crete targets (Chania town, Gerani,
+  Platanias, Agia Marina, Maleme), including the client subject **Stavros Villas
+  & Apartments**
 
 Keep scraper behavior configurable here rather than hard-coding property lists, dates, browser settings, or occupancy defaults in parser code.
 
@@ -212,6 +230,61 @@ Failure categories currently include:
 - `temporary_booking_error`
 - `navigation_error`
 - `extraction_error`
+
+## Analytics (Post-Scraping Modelling)
+
+A downstream analytics layer turns a completed scrape into competitive-pricing
+advice for one Chania self-catering operator. It is **comparables-first**: a
+peer price benchmark is the headline, and an interpretable hedonic model
+supports it by feature-adjusting comps and decomposing price gaps. Every figure
+is **EUR/night for a 2-guest booking** based on *listed asking prices for
+available offers* -- positioning, not demand or revenue optimization.
+
+Pipeline (all on the committed `data/modelling/modelling_table.parquet`):
+
+1. `analysis/loader.py` -- load, decode nested columns, validate invariants.
+2. `analysis/segment.py` -- keep the self-catering segment.
+3. `analysis/competitors.py` -- peer set (geo + feature similarity) and the
+   benchmark price distribution / percentile (headline).
+4. `analysis/hedonic.py` -- OLS market premia, grouped-CV gradient boosting,
+   feature-adjusted comps, and explained-plus-residual gap decomposition.
+5. `analysis/narrative.py` + scripts -- client-facing reports, an Excel
+   workbook, a positioning narrative, and a local dashboard.
+
+For the full as-built method, rationale, outputs, and interpretation guidance
+(including the asking-price caveat, villa 2-guest under-coverage, and known
+model limitations), see
+[docs/analytics/modelling_approach.md](docs/analytics/modelling_approach.md).
+The original staged plan is in
+[docs/analytics/pricing_analytics_roadmap.md](docs/analytics/pricing_analytics_roadmap.md).
+
+## Repeated-Scrape Workflow
+
+Phase 4 adds a competitor price-movement layer over repeated scrapes. Each day,
+scrape the configured properties and append the snapshot to the append-only
+movement-history stores, then view the dashboard:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+python notebooks\property_page_scraper.py
+python scripts\append_price_observations.py --latest
+python scripts\run_dashboard.py
+```
+
+- The scrape writes generated run artifacts under `saved_dom/runs/<timestamp>/`.
+- The append updates `data/modelling/price_observations.parquet` and
+  `data/modelling/offer_presence.parquet` (git-ignored generated operating
+  history; deduped by snapshot/property/window/occupancy identity, so re-running
+  a run is safe).
+- The **Price Movements** dashboard tab shows a clear low-history state until at
+  least two comparable snapshots exist; comparisons appear once a stay window is
+  observed on two different snapshot dates.
+- Optional external context can be supplied at
+  `data/modelling/demand_covariates.csv`; a missing file is valid and reports
+  `No external covariates loaded.`
+
+See [data/modelling/README.md](data/modelling/README.md) for the rebuild command
+and real-run validation notes.
 
 ## Setup
 
@@ -347,6 +420,8 @@ Useful project docs:
 
 - `docs/scraping/scraper_design.md`: Booking.com DOM findings, scrape strategy, output retention policy, and risk notes.
 - `docs/scraping/booking_scraper_roadmap.md`: staged build/hardening/scale roadmap and acceptance criteria.
+- `docs/analytics/modelling_approach.md`: as-built post-scraping modelling approach -- method, reasons, outputs, and how to interpret them.
+- `docs/analytics/pricing_analytics_roadmap.md`: staged plan for the downstream competitive-pricing analytics.
 - `session_notes.md`: requested handoff/status snapshot. This file is replaced when updated, not appended as a changelog.
 - `AGENTS.md` and `CLAUDE.md`: local coding-agent instructions and development discipline.
 
@@ -371,28 +446,25 @@ flowchart TB
 
 ## Roadmap
 
-Near-term scraper hardening:
+Done (scraper + analytics Phases 0-4): production-scale Booking.com scraping,
+structured run validation, the Layer 2 modelling table, the comparables
+benchmark, the hedonic adjustment/explanation layer, client-facing reports and
+dashboard, and the Phase 4 competitor price-movement monitoring layer. See
+[docs/analytics/pricing_analytics_roadmap.md](docs/analytics/pricing_analytics_roadmap.md).
 
-1. Add structured run-output validation helpers and tests.
-2. Add more representative fixtures for selector drift and discounted rate rows.
-3. Strengthen data-quality checks around missing room ids, price normalization, and per-night calculations.
-4. Run rigorous live validation against the configured small property set.
-5. Review live-output gaps before expanding the property list.
+Current operational focus:
 
-Medium-term ingestion work:
+1. Accumulate repeated daily scrapes and append each snapshot to the
+   movement-history stores so movement comparisons gain history.
+2. Watch for parser/selector drift across repeated live runs.
 
-1. Add candidate property discovery from Booking.com search results.
-2. Improve property URL canonicalization and metadata capture.
-3. Decide storage format and loading path for downstream analytics.
-4. Add scheduled ingestion and run monitoring.
+Future direction (out of scope for now):
 
-Longer-term analytics work:
-
-1. Build static property feature tables.
-2. Build time-varying price and availability feature tables.
-3. Implement competitor clustering or nearest-neighbour matching.
-4. Train and evaluate hedonic pricing models.
-5. Build dashboard views for competitor behavior and fair-value gaps.
+1. Varied-occupancy re-scrape for whole-villa / large-party pricing (the 2-guest
+   data under-serves villas).
+2. Fixed-window daily cadence enabling demand-aware pricing beyond positioning.
+3. Clustering-based market segmentation reusing the Phase 2 proximity/similarity
+   machinery.
 
 ## Security And Data Handling
 

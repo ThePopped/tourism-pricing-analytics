@@ -1,5 +1,20 @@
 # Competitive Pricing Analytics Roadmap
 
+## Status
+
+As of 2026-07-01, **Phases 0-4 are fully implemented and committed**. The
+durable export, analysis foundation, comparables benchmark, hedonic
+adjustment/explanation, and the Phase 4 competitor price-movement layer (history
+stores, snapshot comparison, peer-market movement, transparent pricing signals,
+the `/api/movements` service, and the dashboard Price Movements tab) are all in
+place, with Step 10 real-run validation done (see
+[data/modelling/README.md](../../data/modelling/README.md)).
+
+The operational focus now shifts from building to **accumulating repeated daily
+scrapes** so movement comparisons gain history. Future direction (villa
+varied-occupancy re-scrape, fixed-window daily cadence for demand-aware pricing,
+and clustering segmentation) remains in **Out Of Scope** below.
+
 ## Context
 
 Booking.com ingestion is complete: the full 438-property Chania scrape passed its
@@ -150,6 +165,194 @@ job is to *support* the comparables benchmark in two ways:
   table, CV metrics, a sample feature-adjusted benchmark, and a sample
   explained+residual gap breakdown.
 
+## Phase 4: Competitor Price Movement Dashboard
+
+Build a v1 monitoring layer for repeated Booking.com scrapes. This adds
+movement tracking and transparent pricing signals; it is still **positioning and
+monitoring, not demand optimization**.
+
+Defaults locked:
+
+- Scrape cadence: daily.
+- First external covariate source: manual CSV.
+- First productized output: the existing local dashboard.
+- Market movement is property-weighted: compute each property's median first,
+  then compute peer-market medians so properties with many room/rate rows do not
+  overweight the market.
+
+### Historical stores
+
+Add two generated, append-only local Parquet stores under `data/modelling/`:
+
+- `price_observations.parquet`: one observed available Booking.com rate offer
+  per scrape snapshot.
+- `offer_presence.parquet`: one searched property/window per snapshot,
+  including availability and scrape status.
+
+`price_observations.parquet` carries the existing modelling offer fields plus
+snapshot/query context:
+
+- `snapshot_date`, `captured_at`, `run_id`
+- `property_url`, `property_name`, `room_id`, `room_name`, `block_id`
+- `checkin`, `checkout`, `lead_time_days`, `stay_length_days`
+- `adults`, `children`, `rooms`, `currency`, `market`
+- `price_per_night`, `current_price_value`
+- `property_type`, `latitude`, `longitude`
+
+`offer_presence.parquet` carries the same snapshot/query/property/window
+identity fields plus:
+
+- `availability_status`: `available`, `no_available_offer`, `scrape_failed`
+- optional `failure_reason`
+
+Deduplication keys must include snapshot date, property URL, stay window,
+occupancy, currency, market, and for price rows also `room_id` and `block_id`.
+These stores are generated operating history, not committed project fixtures.
+
+Add `scripts/append_price_observations.py`:
+
+- Inputs: `--run-dir`, `--observations-out`, `--presence-out`.
+- Reuse the existing run feature pipeline instead of creating a parallel parser.
+- Append to existing Parquet, dedupe by key, and write atomically.
+
+### Movement analytics
+
+Add `tourism_pricing_analytics/analysis/movement.py` with these public helpers:
+
+- `load_price_observations(path)`
+- `load_offer_presence(path)`
+- `load_demand_covariates(path)`
+- `build_price_movement_table(observations, presence, subject_url, windows,
+  peer_property_urls)`
+- `market_pressure_index(movements)`
+- `movement_reason_codes(row, market_context, covariates)`
+
+Movement compares each snapshot with the immediately previous comparable
+snapshot for the same property/window/query context. Peer sets should reuse the
+existing comparable-peer logic from Phase 2.
+
+Movement output includes current and previous price, EUR and percent change,
+peer median movement, rank movement, reason codes, and an action payload:
+
+- `recommended_action`: `Hold`, `Increase test`, `Discount test`, `Watch`, or
+  `No signal`
+- `rationale`: one sentence
+- `confidence`: `high`, `medium`, or `low`
+- `confidence_flags`: coverage/history warnings
+
+Availability statuses in movement output:
+
+- `available`: available in current and previous comparable snapshot.
+- `newly_available`: no available offer previously, available now.
+- `disappeared`: available previously, no available offer now.
+- `still_unavailable`: no available offer in both snapshots.
+- `unknown`: current or previous scrape failed or context was not observed.
+
+V1 reason codes:
+
+- `market_firming`
+- `market_softening`
+- `property_specific_increase`
+- `property_specific_discount`
+- `lead_time_compression`
+- `availability_compression`
+- `nearby_undercutters_discounting`
+- `premium_not_feature_supported`
+- `possible_price_headroom`
+- `low_confidence_low_history`
+- `external_covariates_missing`
+- `search_demand_rising`
+- `search_demand_softening`
+- `holiday_or_event_pressure`
+- `weather_possible_factor`
+
+### Manual covariates
+
+Add optional CSV support at `data/modelling/demand_covariates.csv`.
+
+Schema:
+
+- `date`
+- `checkin`
+- `market`
+- `google_trends_index`
+- `holiday_flag`
+- `event_flag`
+- `weather_temp_c`
+- `weather_rain_mm`
+- `notes`
+
+Join covariates by `checkin` and `market`. Missing file is valid and should
+produce the user-facing status: `No external covariates loaded.` Covariates are
+context labels only in v1; do not train causal or predictive demand models.
+
+### Dashboard integration
+
+Extend the existing stdlib dashboard in `scripts/run_dashboard.py`.
+
+New CLI args:
+
+- `--observations-path`, default `data/modelling/price_observations.parquet`
+- `--presence-path`, default `data/modelling/offer_presence.parquet`
+- `--covariates-path`, default `data/modelling/demand_covariates.csv`
+
+New route:
+
+- `/api/movements`
+- Query params: `subject_url`, `lead_time_days`, `stay_length_days`, `season`,
+  `max_peers`
+- Returns subject movement, peer movement rows, market pressure summary, reason
+  codes, action payload, and confidence flags.
+
+Keep `/api/meta` and `/api/benchmark` backward compatible. Add a compact
+**Price Movements** tab with market-pressure KPIs, competitor movement table,
+subject-vs-peer timeline, and action panel. If observation history is missing or
+has fewer than two comparable snapshots, render a clear low-history state
+without breaking the existing benchmark tab.
+
+### Phase 4 implementation steps
+
+Each step should end with the full relevant verification sweep and a focused
+commit before moving on.
+
+1. **Schema contracts and fixtures.** Define the observation and presence schema
+   constants, dedupe keys, validation errors, and small synthetic test fixtures.
+   Add tests for required columns, date parsing, positive prices, valid
+   availability statuses, and query-context identity.
+2. **Observation store append path.** Add `scripts/append_price_observations.py`
+   for `price_observations.parquet` only. Reuse the existing feature-building
+   pipeline, normalize rows to the observation schema, append to existing
+   Parquet, dedupe by the observation key, and write atomically.
+3. **Presence store append path.** Extend the append script to create
+   `offer_presence.parquet` from the same run context. Capture `available`,
+   `no_available_offer`, and `scrape_failed` states without inferring
+   unavailable rows from missing price rows alone.
+4. **History loaders and validators.** Add movement-history loaders in
+   `analysis/movement.py` for observations, presence, and optional covariates.
+   Missing covariates must be safe; missing observation history should return a
+   clear low-history condition for dashboard use.
+5. **Snapshot comparison core.** Build previous-snapshot joins for the same
+   property/window/query context. Compute current/previous prices, EUR change,
+   percent change, and the five availability states: `available`,
+   `newly_available`, `disappeared`, `still_unavailable`, and `unknown`.
+6. **Peer market movement.** Reuse the Phase 2 comparable-peer logic to select
+   peers, then compute property-weighted peer medians and rank changes by
+   snapshot/window. Add regression tests proving multi-room properties do not
+   overweight peer medians.
+7. **Reason codes and actions.** Add market-pressure summaries, reason codes,
+   recommended action, rationale, confidence, and confidence flags. Keep all
+   rules transparent and deterministic; covariates add context labels only.
+8. **Movement API service layer.** Extend the dashboard service with loaded
+   history/covariates and a JSON-safe `/api/movements` payload. Keep `/api/meta`
+   and `/api/benchmark` unchanged and working when history files are absent.
+9. **Price Movements tab.** Add the compact dashboard tab: market-pressure KPIs,
+   competitor movement table, subject-vs-peer timeline, action panel, and
+   low-history/empty states. Avoid broad dashboard redesign.
+10. **Real-run validation and docs.** Run the append script on available local
+    runs, inspect output shapes and sample movement rows, update
+    `data/modelling/README.md` with the exact commands, and commit only docs or
+    small fixtures -- not large generated history files.
+
 ## Tests
 
 Tests live under `tests/`, focus on pure logic, and use seed `10001`.
@@ -168,6 +371,18 @@ Tests live under `tests/`, focus on pure logic, and use seed `10001`.
   impute + missingness flags, `max_persons` excluded, no identifier/leakage
   columns in `X`, `GroupKFold` groups never straddle train/test, and
   `explain_price_gap` parts (explained + residual) sum to the observed gap.
+- `test_price_observations.py`: synthetic run dir -> observations/presence
+  stores; appends a second snapshot; dedupes repeated rows; preserves query
+  context so occupancy/currency/market rows do not merge.
+- `test_movement.py`: previous-snapshot joins, EUR and percent changes,
+  property-weighted peer medians, rank changes, availability states, reason
+  codes, recommended actions, and low-confidence flags.
+- `test_movement_covariates.py`: missing covariates CSV is safe; valid CSV joins
+  by `checkin` and `market`; search demand, holiday/event, and weather labels
+  appear when applicable.
+- `test_dashboard.py`: `/api/meta` remains backward compatible;
+  `/api/movements` returns JSON-safe payloads; dashboard HTML includes the
+  Price Movements tab and mount points.
 
 ## Verification
 
@@ -192,7 +407,8 @@ Future plans:
 - **Varied-occupancy re-scrape** for whole-villa / large-party pricing (the
   2-guest data under-serves villas).
 - **Recurring scrape cadence + demand-aware pricing** (price-move and
-  availability/`scarcity_text` time series) -- the real unlock for dynamic
-  weekly/monthly *optimization* rather than positioning.
+  availability/`scarcity_text` time series) beyond the Phase 4 monitoring layer
+  -- the real unlock for dynamic weekly/monthly *optimization* rather than
+  positioning.
 - **Clustering-based market segmentation** (will reuse Phase 2 proximity/
-  similarity) and **dashboarding**. All consume the same committed Parquet.
+  similarity). All consume the same committed Parquet/history contracts.
