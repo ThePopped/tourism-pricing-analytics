@@ -2,10 +2,115 @@ import logging
 import random
 import time
 
-from playwright.sync_api import BrowserContext, Page
+from playwright.sync_api import Browser, BrowserContext, Page, Route
 
 from tourism_pricing_analytics.scraping.booking.models import ScraperConfig, ScrollConfig
 from tourism_pricing_analytics.scraping.booking.parsing import get_locator_text
+
+
+# Resource types that carry no data we extract. Prices, room/property text, the
+# facilities markup, and the photo-count label are all HTML/XHR; images, media,
+# and fonts only inflate the renderer's working set. Aborting them cuts per-page
+# memory ~40-50% and speeds navigation, which is what lets several headless
+# workers coexist on a RAM-constrained host without pagefile thrash. Stylesheets
+# are kept because visibility checks (is_visible) and scroll-into-view depend on
+# layout.
+BLOCKED_RESOURCE_TYPES: frozenset[str] = frozenset({"image", "media", "font"})
+
+# Chromium launch flags that lower each worker's footprint. --disable-dev-shm-usage
+# avoids the small /dev/shm tmpfs (writes to disk-backed temp instead of failing),
+# the renderer/process caps and js heap cap bound per-tab growth, and disabling
+# extensions/background networking trims idle overhead.
+MEMORY_SAVING_BROWSER_ARGS: tuple[str, ...] = (
+    "--disable-dev-shm-usage",
+    "--renderer-process-limit=1",
+    "--js-flags=--max-old-space-size=512",
+    "--disable-extensions",
+    "--disable-background-networking",
+)
+
+
+# A single BrowserContext/Page reused across a worker's whole slice (~800
+# navigations) grows without bound: the Chromium renderer never fully reclaims
+# session history, detached DOM and caches, and Playwright retains the Request/
+# Route objects that route interception creates for every request tied to the
+# page's lifetime. Closing the context (all its pages + renderer) and opening a
+# fresh one every N properties releases both sides, keeping each worker flat
+# instead of ramping to ~600 MB.
+#
+# The cadence is expressed in *properties*, but the two phases differ sharply in
+# navigations per property: room inventory is ~1, the price phase is ~15 (one per
+# date window). Recycling every 10 properties in the price phase means ~150
+# navigations of object churn between recycles, and CPython holds that high-water
+# mark as RSS even after the context is freed. So the price phase recycles far
+# more often to keep the per-cycle peak (and thus the plateau) low.
+CONTEXT_RECYCLE_EVERY_N_PROPERTIES: int = 10
+PRICE_CONTEXT_RECYCLE_EVERY_N_PROPERTIES: int = 3
+
+
+def should_block_resource(resource_type: str) -> bool:
+    """Return True for request resource types safe to abort for memory savings."""
+
+    return resource_type in BLOCKED_RESOURCE_TYPES
+
+
+def block_heavy_resources(context: BrowserContext) -> None:
+    """Abort image/media/font requests on every page in the context."""
+
+    def _route(route: Route) -> None:
+        if should_block_resource(route.request.resource_type):
+            route.abort()
+        else:
+            route.continue_()
+
+    context.route("**/*", _route)
+
+
+def new_scraper_context(browser: Browser, scraper_config: ScraperConfig) -> BrowserContext:
+    """Create a browser context with the memory-saving resource blocking applied."""
+
+    context = browser.new_context(
+        user_agent=scraper_config.browser.user_agent,
+        viewport={
+            "width": scraper_config.browser.viewport.width,
+            "height": scraper_config.browser.viewport.height,
+        },
+    )
+    block_heavy_resources(context)
+    return context
+
+
+def recycle_context(
+    browser: Browser,
+    context: BrowserContext,
+    scraper_config: ScraperConfig,
+) -> tuple[BrowserContext, Page]:
+    """Close the current context and return a fresh context and page.
+
+    Releases the accumulated renderer working set and Playwright network object
+    graph that grow across many navigations on a long-lived context. Closing is
+    best-effort so a teardown error never aborts the scrape.
+    """
+
+    try:
+        context.close()
+    except Exception:
+        logging.debug("Failed to close context during recycle", exc_info=True)
+    new_context = new_scraper_context(browser, scraper_config)
+    return new_context, new_context.new_page()
+
+
+def should_recycle_context(property_index: int, recycle_every: int) -> bool:
+    """True when the context should be recycled before processing this property.
+
+    Recycling happens at property boundaries only (never mid-property, so all of
+    a property's date windows share one context). Index 0 is skipped because the
+    caller supplies a fresh context for the first property.
+    """
+
+    if recycle_every <= 0:
+        return False
+    return property_index > 0 and property_index % recycle_every == 0
 
 
 def human_pause(a: float = 0.2, b: float = 0.7) -> None:

@@ -4,12 +4,18 @@ from dataclasses import replace
 from datetime import date, datetime
 from pathlib import Path
 
-from playwright.sync_api import BrowserContext, Page, Playwright, sync_playwright
+from playwright.sync_api import Browser, BrowserContext, Page, Playwright, sync_playwright
 
 from tourism_pricing_analytics.scraping.booking.browser import (
+    CONTEXT_RECYCLE_EVERY_N_PROPERTIES,
+    MEMORY_SAVING_BROWSER_ARGS,
+    PRICE_CONTEXT_RECYCLE_EVERY_N_PROPERTIES,
     ensure_page,
     ensure_property_facilities_loaded,
     navigate_to_page,
+    new_scraper_context,
+    recycle_context,
+    should_recycle_context,
 )
 from tourism_pricing_analytics.scraping.booking.config import load_scraper_config
 from tourism_pricing_analytics.scraping.booking.failures import (
@@ -198,11 +204,14 @@ def wait_before_retry(page: Page | None, scraper_config: ScraperConfig, attempt:
 
 
 def run_room_inventory_loop(
+    browser: Browser,
     context: BrowserContext,
     page: Page,
     scraper_config: ScraperConfig,
     property_output_dirs: dict[str, Path],
+    recycle_every: int = CONTEXT_RECYCLE_EVERY_N_PROPERTIES,
 ) -> tuple[
+    BrowserContext,
     Page | None,
     list[RoomInventoryRecord],
     list[PropertyFeatureRecord],
@@ -212,7 +221,13 @@ def run_room_inventory_loop(
     property_feature_records: list[PropertyFeatureRecord] = []
     failure_records: list[ScrapeFailureRecord] = []
 
-    for target in scraper_config.properties:
+    for property_index, target in enumerate(scraper_config.properties):
+        if should_recycle_context(property_index, recycle_every):
+            context, page = recycle_context(browser, context, scraper_config)
+            logging.info(
+                "Recycled browser context before room inventory property %d to release memory",
+                property_index,
+            )
         property_url = build_room_inventory_url(target.url)
         output_dir = property_output_dirs[target.url]
         property_failure_records: list[ScrapeFailureRecord] = []
@@ -371,21 +386,35 @@ def run_room_inventory_loop(
             target.name,
         )
 
-    return page, records, property_feature_records, failure_records
+    return context, page, records, property_feature_records, failure_records
 
 
 def run_price_loop(
+    browser: Browser,
     context: BrowserContext,
     page: Page | None,
     scraper_config: ScraperConfig,
     property_output_dirs: dict[str, Path],
     search_base_date: date | None = None,
-) -> tuple[Page | None, list[PriceRowRecord], list[RoomFeatureRecord], list[ScrapeFailureRecord]]:
+    recycle_every: int = PRICE_CONTEXT_RECYCLE_EVERY_N_PROPERTIES,
+) -> tuple[
+    BrowserContext,
+    Page | None,
+    list[PriceRowRecord],
+    list[RoomFeatureRecord],
+    list[ScrapeFailureRecord],
+]:
     records: list[PriceRowRecord] = []
     room_feature_records: list[RoomFeatureRecord] = []
     failure_records: list[ScrapeFailureRecord] = []
 
-    for target in scraper_config.properties:
+    for property_index, target in enumerate(scraper_config.properties):
+        if should_recycle_context(property_index, recycle_every):
+            context, page = recycle_context(browser, context, scraper_config)
+            logging.info(
+                "Recycled browser context before price property %d to release memory",
+                property_index,
+            )
         output_dir = property_output_dirs[target.url]
         property_records: list[PriceRowRecord] = []
         property_failure_records: list[ScrapeFailureRecord] = []
@@ -598,7 +627,7 @@ def run_price_loop(
         if property_failure_records:
             append_property_failures(property_failure_records, output_dir)
 
-    return page, records, room_feature_records, failure_records
+    return context, page, records, room_feature_records, failure_records
 
 
 def validate_and_report_run(run_dir: Path) -> None:
@@ -650,16 +679,11 @@ def run(
     browser = playwright.chromium.launch(
         headless=scraper_config.browser.headless,
         slow_mo=scraper_config.browser.slow_mo_ms,
+        args=list(MEMORY_SAVING_BROWSER_ARGS),
     )
 
     try:
-        context = browser.new_context(
-            user_agent=scraper_config.browser.user_agent,
-            viewport={
-                "width": scraper_config.browser.viewport.width,
-                "height": scraper_config.browser.viewport.height,
-            },
-        )
+        context = new_scraper_context(browser, scraper_config)
         page = context.new_page()
 
         all_properties = all_targets or scraper_config.properties
@@ -708,17 +732,29 @@ def run(
             )
 
         (
+            context,
             page,
             room_inventory_records,
             property_feature_records,
             room_inventory_failures,
         ) = run_room_inventory_loop(
+            browser=browser,
             context=context,
             page=page,
             scraper_config=active_config,
             property_output_dirs=property_output_dirs,
         )
-        page, price_row_records, room_feature_records, price_row_failures = run_price_loop(
+        # Start the long price phase on a fresh context so it does not inherit the
+        # renderer/network growth accumulated during the room inventory phase.
+        context, page = recycle_context(browser, context, scraper_config)
+        (
+            context,
+            page,
+            price_row_records,
+            room_feature_records,
+            price_row_failures,
+        ) = run_price_loop(
+            browser=browser,
             context=context,
             page=page,
             scraper_config=active_config,

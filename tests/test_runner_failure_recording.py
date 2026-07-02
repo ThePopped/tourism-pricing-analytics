@@ -127,7 +127,8 @@ class RunnerFailureRecordingTests(unittest.TestCase):
             ),
         ):
             with self.assertLogs(level="ERROR"):
-                _, price_rows, _room_features, failures = run_price_loop(
+                _ctx, _, price_rows, _room_features, failures = run_price_loop(
+                    browser=object(),
                     context=object(),
                     page=page,
                     scraper_config=scraper_config,
@@ -198,7 +199,8 @@ class RunnerFailureRecordingTests(unittest.TestCase):
                 "tourism_pricing_analytics.scraping.booking.runner.save_failure_snapshot",
             ) as save_snapshot,
         ):
-            _, price_rows, _room_features, failures = run_price_loop(
+            _ctx, _, price_rows, _room_features, failures = run_price_loop(
+                browser=object(),
                 context=object(),
                 page=page,
                 scraper_config=scraper_config,
