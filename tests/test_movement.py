@@ -50,6 +50,43 @@ from tourism_pricing_analytics.analysis.movement import (
 )
 
 
+def next_day_observation(**overrides: object) -> dict[str, object]:
+    """A 2026-07-01 snapshot of the same constant-maturity window as the
+    2026-06-30 sample default.
+
+    The scraper builds ``checkin = base_date + lead_time``, so a daily run keeps
+    the lead/stay window constant while the absolute stay dates shift one day
+    forward. Movement pairs on the window, not the absolute dates, so this helper
+    holds ``lead_time_days`` at the default (15) and moves ``checkin`` to
+    2026-07-16 / ``checkout`` to 2026-07-20.
+    """
+
+    row: dict[str, object] = {
+        "snapshot_date": "2026-07-01",
+        "captured_at": "2026-07-01T09:15:00",
+        "run_id": "20260701_091500_000000",
+        "checkin": "2026-07-16",
+        "checkout": "2026-07-20",
+        "block_id": "101_2026-07-16_2026-07-20",
+    }
+    row.update(overrides)
+    return sample_price_observation(**row)
+
+
+def next_day_presence(**overrides: object) -> dict[str, object]:
+    """Presence counterpart to :func:`next_day_observation` (no ``block_id``)."""
+
+    row: dict[str, object] = {
+        "snapshot_date": "2026-07-01",
+        "captured_at": "2026-07-01T09:15:00",
+        "run_id": "20260701_091500_000000",
+        "checkin": "2026-07-16",
+        "checkout": "2026-07-20",
+    }
+    row.update(overrides)
+    return sample_offer_presence(**row)
+
+
 class MovementHistoryLoaderTests(unittest.TestCase):
     def test_missing_price_observations_returns_empty_low_history_frame(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -244,22 +281,14 @@ class SnapshotComparisonCoreTests(unittest.TestCase):
                     price_per_night=140.0,
                     current_price_value=560.0,
                 ),
-                sample_price_observation(
-                    snapshot_date="2026-07-01",
-                    captured_at="2026-07-01T09:15:00",
-                    run_id="20260701_091500_000000",
-                    lead_time_days=14,
+                next_day_observation(
                     price_per_night=110.0,
                     current_price_value=440.0,
                 ),
-                sample_price_observation(
-                    snapshot_date="2026-07-01",
-                    captured_at="2026-07-01T09:15:00",
-                    run_id="20260701_091500_000000",
+                next_day_observation(
                     room_id="102",
                     room_name="Garden Studio",
-                    block_id="102_2026-07-15_2026-07-19",
-                    lead_time_days=14,
+                    block_id="102_2026-07-16_2026-07-20",
                     price_per_night=150.0,
                     current_price_value=600.0,
                 ),
@@ -268,12 +297,7 @@ class SnapshotComparisonCoreTests(unittest.TestCase):
         presence = pd.DataFrame(
             [
                 sample_offer_presence(snapshot_date="2026-06-30"),
-                sample_offer_presence(
-                    snapshot_date="2026-07-01",
-                    captured_at="2026-07-01T09:15:00",
-                    run_id="20260701_091500_000000",
-                    lead_time_days=14,
-                ),
+                next_day_presence(),
             ]
         )
 
@@ -289,7 +313,7 @@ class SnapshotComparisonCoreTests(unittest.TestCase):
         self.assertEqual(current["previous_snapshot_date"], pd.Timestamp("2026-06-30"))
         self.assertEqual(current["availability_state"], MOVEMENT_STATUS_AVAILABLE)
         self.assertEqual(current["previous_lead_time_days"], 15)
-        self.assertEqual(current["lead_time_days"], 14)
+        self.assertEqual(current["lead_time_days"], 15)
         self.assertEqual(current["current_price_per_night"], 130.0)
         self.assertEqual(current["previous_price_per_night"], 120.0)
         self.assertEqual(current["price_change_eur"], 10.0)
@@ -298,15 +322,83 @@ class SnapshotComparisonCoreTests(unittest.TestCase):
         self.assertEqual(current["previous_offer_count"], 2)
         self.assertTrue(current["is_subject"])
 
-    def test_observations_can_supply_available_presence_when_presence_is_absent(self) -> None:
+    def test_constant_lead_time_pairs_across_shifting_checkin(self) -> None:
+        # Regression: the scraper builds checkin = base_date + lead_time, so a
+        # daily run keeps the lead/stay window fixed while the absolute checkin
+        # shifts one day forward. Movement must pair on the window, not the
+        # absolute stay dates, or every consecutive daily snapshot reports
+        # "No signal" (previous_snapshot_date / price_change_pct null).
         observations = pd.DataFrame(
             [
-                sample_price_observation(snapshot_date="2026-06-30"),
+                sample_price_observation(
+                    snapshot_date="2026-06-30",
+                    checkin="2026-08-29",
+                    checkout="2026-09-05",
+                    block_id="101_2026-08-29_2026-09-05",
+                    lead_time_days=60,
+                    stay_length_days=7,
+                    price_per_night=200.0,
+                    current_price_value=1400.0,
+                ),
                 sample_price_observation(
                     snapshot_date="2026-07-01",
                     captured_at="2026-07-01T09:15:00",
                     run_id="20260701_091500_000000",
-                    lead_time_days=14,
+                    checkin="2026-08-30",
+                    checkout="2026-09-06",
+                    block_id="101_2026-08-30_2026-09-06",
+                    lead_time_days=60,
+                    stay_length_days=7,
+                    price_per_night=190.0,
+                    current_price_value=1330.0,
+                ),
+            ]
+        )
+        presence = pd.DataFrame(
+            [
+                sample_offer_presence(
+                    snapshot_date="2026-06-30",
+                    checkin="2026-08-29",
+                    checkout="2026-09-05",
+                    lead_time_days=60,
+                    stay_length_days=7,
+                ),
+                sample_offer_presence(
+                    snapshot_date="2026-07-01",
+                    captured_at="2026-07-01T09:15:00",
+                    run_id="20260701_091500_000000",
+                    checkin="2026-08-30",
+                    checkout="2026-09-06",
+                    lead_time_days=60,
+                    stay_length_days=7,
+                ),
+            ]
+        )
+
+        movement = build_price_movement_table(
+            observations,
+            presence,
+            subject_url="https://example.test/apartment-one",
+            windows=None,
+            peer_property_urls=[],
+        )
+
+        current = movement.loc[movement["snapshot_date"].eq(pd.Timestamp("2026-07-01"))].iloc[0]
+        # The absolute checkins differ across the two snapshots ...
+        self.assertEqual(current["checkin"], pd.Timestamp("2026-08-30"))
+        # ... yet the constant-maturity window still pairs.
+        self.assertEqual(current["previous_snapshot_date"], pd.Timestamp("2026-06-30"))
+        self.assertEqual(current["availability_state"], MOVEMENT_STATUS_AVAILABLE)
+        self.assertEqual(current["current_price_per_night"], 190.0)
+        self.assertEqual(current["previous_price_per_night"], 200.0)
+        self.assertEqual(current["price_change_eur"], -10.0)
+        self.assertAlmostEqual(current["price_change_pct"], -10.0 / 200.0)
+
+    def test_observations_can_supply_available_presence_when_presence_is_absent(self) -> None:
+        observations = pd.DataFrame(
+            [
+                sample_price_observation(snapshot_date="2026-06-30"),
+                next_day_observation(
                     price_per_night=135.0,
                     current_price_value=540.0,
                 ),
@@ -335,23 +427,15 @@ class SnapshotComparisonCoreTests(unittest.TestCase):
                     price_per_night=100.0,
                     current_price_value=400.0,
                 ),
-                sample_price_observation(
+                next_day_observation(
                     property_url="available",
                     property_name="Available Stay",
-                    snapshot_date="2026-07-01",
-                    captured_at="2026-07-01T09:15:00",
-                    run_id="20260701_091500_000000",
-                    lead_time_days=14,
                     price_per_night=120.0,
                     current_price_value=480.0,
                 ),
-                sample_price_observation(
+                next_day_observation(
                     property_url="new",
                     property_name="New Stay",
-                    snapshot_date="2026-07-01",
-                    captured_at="2026-07-01T09:15:00",
-                    run_id="20260701_091500_000000",
-                    lead_time_days=14,
                     price_per_night=130.0,
                     current_price_value=520.0,
                 ),
@@ -366,35 +450,23 @@ class SnapshotComparisonCoreTests(unittest.TestCase):
         presence = pd.DataFrame(
             [
                 sample_offer_presence(property_url="available", property_name="Available Stay"),
-                sample_offer_presence(
+                next_day_presence(
                     property_url="available",
                     property_name="Available Stay",
-                    snapshot_date="2026-07-01",
-                    captured_at="2026-07-01T09:15:00",
-                    run_id="20260701_091500_000000",
-                    lead_time_days=14,
                 ),
                 sample_offer_presence(
                     property_url="new",
                     property_name="New Stay",
                     availability_status="no_available_offer",
                 ),
-                sample_offer_presence(
+                next_day_presence(
                     property_url="new",
                     property_name="New Stay",
-                    snapshot_date="2026-07-01",
-                    captured_at="2026-07-01T09:15:00",
-                    run_id="20260701_091500_000000",
-                    lead_time_days=14,
                 ),
                 sample_offer_presence(property_url="gone", property_name="Gone Stay"),
-                sample_offer_presence(
+                next_day_presence(
                     property_url="gone",
                     property_name="Gone Stay",
-                    snapshot_date="2026-07-01",
-                    captured_at="2026-07-01T09:15:00",
-                    run_id="20260701_091500_000000",
-                    lead_time_days=14,
                     availability_status="no_available_offer",
                 ),
                 sample_offer_presence(
@@ -402,13 +474,9 @@ class SnapshotComparisonCoreTests(unittest.TestCase):
                     property_name="Still Unavailable Stay",
                     availability_status="no_available_offer",
                 ),
-                sample_offer_presence(
+                next_day_presence(
                     property_url="still",
                     property_name="Still Unavailable Stay",
-                    snapshot_date="2026-07-01",
-                    captured_at="2026-07-01T09:15:00",
-                    run_id="20260701_091500_000000",
-                    lead_time_days=14,
                     availability_status="no_available_offer",
                 ),
                 sample_offer_presence(
@@ -417,13 +485,9 @@ class SnapshotComparisonCoreTests(unittest.TestCase):
                     availability_status="scrape_failed",
                     failure_reason="timeout",
                 ),
-                sample_offer_presence(
+                next_day_presence(
                     property_url="failed",
                     property_name="Failed Stay",
-                    snapshot_date="2026-07-01",
-                    captured_at="2026-07-01T09:15:00",
-                    run_id="20260701_091500_000000",
-                    lead_time_days=14,
                 ),
             ]
         )
@@ -451,11 +515,7 @@ class SnapshotComparisonCoreTests(unittest.TestCase):
         observations = pd.DataFrame(
             [
                 sample_price_observation(snapshot_date="2026-06-30", adults=3),
-                sample_price_observation(
-                    snapshot_date="2026-07-01",
-                    captured_at="2026-07-01T09:15:00",
-                    run_id="20260701_091500_000000",
-                    lead_time_days=14,
+                next_day_observation(
                     price_per_night=135.0,
                     current_price_value=540.0,
                 ),
@@ -464,12 +524,7 @@ class SnapshotComparisonCoreTests(unittest.TestCase):
         presence = pd.DataFrame(
             [
                 sample_offer_presence(snapshot_date="2026-06-30", adults=3),
-                sample_offer_presence(
-                    snapshot_date="2026-07-01",
-                    captured_at="2026-07-01T09:15:00",
-                    run_id="20260701_091500_000000",
-                    lead_time_days=14,
-                ),
+                next_day_presence(),
             ]
         )
 
@@ -534,7 +589,7 @@ class PeerMarketMovementTests(unittest.TestCase):
             presence,
             observations,
             subject_url="subject",
-            windows=[{"checkin": "2026-07-15", "stay_length_days": 4}],
+            windows=[{"lead_time_days": 15, "stay_length_days": 4}],
             max_peers=2,
             w_geo=1.0,
             w_sim=0.0,
@@ -658,6 +713,20 @@ class MovementSignalTests(unittest.TestCase):
         self.assertIn("missing_peer_market_median", payload["confidence_flags"])
 
 
+_MOVEMENT_LEAD_TIME_DAYS = 15
+_MOVEMENT_STAY_LENGTH_DAYS = 4
+
+
+def _movement_window(snapshot_date: str) -> tuple[str, str]:
+    """Constant-maturity stay dates for a snapshot: lead/stay stay fixed while
+    the absolute checkin shifts one day per daily run (checkin = snapshot + lead).
+    """
+
+    checkin = pd.Timestamp(snapshot_date) + pd.Timedelta(days=_MOVEMENT_LEAD_TIME_DAYS)
+    checkout = checkin + pd.Timedelta(days=_MOVEMENT_STAY_LENGTH_DAYS)
+    return checkin.strftime("%Y-%m-%d"), checkout.strftime("%Y-%m-%d")
+
+
 def _movement_observation(
     property_url: str,
     property_name: str,
@@ -668,7 +737,7 @@ def _movement_observation(
     room_id: str = "101",
 ) -> dict[str, object]:
     date = pd.Timestamp(snapshot_date)
-    lead_time_days = (pd.Timestamp("2026-07-15") - date).days
+    checkin, checkout = _movement_window(snapshot_date)
     return sample_price_observation(
         snapshot_date=snapshot_date,
         captured_at=f"{snapshot_date}T09:15:00",
@@ -677,8 +746,11 @@ def _movement_observation(
         property_name=property_name,
         room_id=room_id,
         room_name=f"Room {room_id}",
-        block_id=f"{room_id}_2026-07-15_2026-07-19",
-        lead_time_days=lead_time_days,
+        block_id=f"{room_id}_{checkin}_{checkout}",
+        checkin=checkin,
+        checkout=checkout,
+        lead_time_days=_MOVEMENT_LEAD_TIME_DAYS,
+        stay_length_days=_MOVEMENT_STAY_LENGTH_DAYS,
         price_per_night=price_per_night,
         current_price_value=price_per_night * 4,
         latitude=latitude,
@@ -692,13 +764,17 @@ def _movement_presence(
     latitude: float,
 ) -> dict[str, object]:
     date = pd.Timestamp(snapshot_date)
+    checkin, checkout = _movement_window(snapshot_date)
     return sample_offer_presence(
         snapshot_date=snapshot_date,
         captured_at=f"{snapshot_date}T09:15:00",
         run_id=f"{date.strftime('%Y%m%d')}_091500_000000",
         property_url=property_url,
         property_name=property_name,
-        lead_time_days=(pd.Timestamp("2026-07-15") - date).days,
+        checkin=checkin,
+        checkout=checkout,
+        lead_time_days=_MOVEMENT_LEAD_TIME_DAYS,
+        stay_length_days=_MOVEMENT_STAY_LENGTH_DAYS,
         latitude=latitude,
     )
 

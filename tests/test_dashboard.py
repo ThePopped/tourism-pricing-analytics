@@ -171,7 +171,13 @@ class DashboardServiceTests(unittest.TestCase):
         self.assertIn("market_pressure_label", payload["market_pressure"])
         self.assertIn("recommended_action", payload["action_payload"])
         self.assertIn("reason_codes", payload)
-        self.assertEqual(len(payload["timeline"]), 1)
+        # Both snapshots share the same constant-maturity window (lead 1), so
+        # the timeline spans both the previous (06-29) and current (06-30) points.
+        self.assertEqual(len(payload["timeline"]), 2)
+        self.assertEqual(
+            [entry["snapshot_date"] for entry in payload["timeline"]],
+            ["2026-06-29", "2026-06-30"],
+        )
         json.dumps(payload, allow_nan=False)
 
     def test_movements_endpoint_returns_json_payload(self) -> None:
@@ -214,7 +220,14 @@ def _movement_observation_for_dashboard(
     longitude: float,
 ) -> dict[str, object]:
     snapshot = pd.Timestamp(snapshot_date)
-    checkin = pd.Timestamp("2026-07-01")
+    # Constant-maturity window: lead stays 1, checkin shifts with the snapshot
+    # (checkin = snapshot + 1), mirroring the scraper. The 2026-06-30 snapshot
+    # therefore has checkin 2026-07-01, matching the demand covariate below.
+    lead_time_days = 1
+    checkin = snapshot + pd.Timedelta(days=lead_time_days)
+    checkout = checkin + pd.Timedelta(days=4)
+    checkin_str = checkin.strftime("%Y-%m-%d")
+    checkout_str = checkout.strftime("%Y-%m-%d")
     return sample_price_observation(
         snapshot_date=snapshot_date,
         captured_at=f"{snapshot_date}T09:15:00",
@@ -223,10 +236,10 @@ def _movement_observation_for_dashboard(
         property_name=property_name,
         room_id=f"{property_url}-room",
         room_name="Dashboard Test Room",
-        block_id=f"{property_url}-2026-07-01-2026-07-05",
-        checkin="2026-07-01",
-        checkout="2026-07-05",
-        lead_time_days=(checkin - snapshot).days,
+        block_id=f"{property_url}-{checkin_str}-{checkout_str}",
+        checkin=checkin_str,
+        checkout=checkout_str,
+        lead_time_days=lead_time_days,
         stay_length_days=4,
         price_per_night=price_per_night,
         current_price_value=price_per_night * 4,
@@ -243,16 +256,18 @@ def _movement_presence_for_dashboard_row(
     longitude: float,
 ) -> dict[str, object]:
     snapshot = pd.Timestamp(snapshot_date)
-    checkin = pd.Timestamp("2026-07-01")
+    lead_time_days = 1
+    checkin = snapshot + pd.Timedelta(days=lead_time_days)
+    checkout = checkin + pd.Timedelta(days=4)
     return sample_offer_presence(
         snapshot_date=snapshot_date,
         captured_at=f"{snapshot_date}T09:15:00",
         run_id=f"{snapshot.strftime('%Y%m%d')}_091500_000000",
         property_url=property_url,
         property_name=property_name,
-        checkin="2026-07-01",
-        checkout="2026-07-05",
-        lead_time_days=(checkin - snapshot).days,
+        checkin=checkin.strftime("%Y-%m-%d"),
+        checkout=checkout.strftime("%Y-%m-%d"),
+        lead_time_days=lead_time_days,
         stay_length_days=4,
         latitude=latitude,
         longitude=longitude,

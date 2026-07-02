@@ -95,9 +95,20 @@ MOVEMENT_AVAILABILITY_STATES = frozenset(
     }
 )
 
+# Movement pairs consecutive snapshots on the constant-maturity window
+# (lead time + stay length), NOT the absolute checkin/checkout, because the
+# scraper generates checkin = base_date + lead_time, so absolute stay dates
+# shift one day per daily run and would never pair. This is intentionally
+# decoupled from DEDUPE_QUERY_CONTEXT_COLUMNS, which stays absolute for storage.
 MOVEMENT_CONTEXT_KEY = (
     "property_url",
-    *DEDUPE_QUERY_CONTEXT_COLUMNS,
+    "lead_time_days",
+    "stay_length_days",
+    "adults",
+    "children",
+    "rooms",
+    "currency",
+    "market",
 )
 PRICE_MOVEMENT_COLUMNS = (
     "snapshot_date",
@@ -128,9 +139,19 @@ PRICE_MOVEMENT_COLUMNS = (
     "previous_offer_count",
     "is_subject",
 )
+# Group peers within a snapshot on the same constant-maturity window used for
+# pairing. This is more correct than absolute checkin even within one snapshot:
+# a run crossing midnight can place two different absolute checkins under the
+# same snapshot_date for the same maturity.
 PEER_MARKET_CONTEXT_COLUMNS = (
     "snapshot_date",
-    *DEDUPE_QUERY_CONTEXT_COLUMNS,
+    "lead_time_days",
+    "stay_length_days",
+    "adults",
+    "children",
+    "rooms",
+    "currency",
+    "market",
 )
 PEER_MARKET_SUMMARY_COLUMNS = (
     "peer_property_count",
@@ -588,8 +609,10 @@ def _presence_from_available_observations(observations: pd.DataFrame) -> pd.Data
             captured_at=("captured_at", "max"),
             run_id=("run_id", "last"),
             property_name=("property_name", "last"),
-            lead_time_days=("lead_time_days", "last"),
-            stay_length_days=("stay_length_days", "last"),
+            # lead_time_days / stay_length_days are group keys now; checkin /
+            # checkout are not, so carry them through as representative values.
+            checkin=("checkin", "last"),
+            checkout=("checkout", "last"),
             property_type=("property_type", "last"),
             latitude=("latitude", "last"),
             longitude=("longitude", "last"),
@@ -685,7 +708,7 @@ def build_price_movement_table(
         on=["snapshot_date", *MOVEMENT_CONTEXT_KEY],
         how="left",
     )
-    current = current.sort_values(["property_url", *DEDUPE_QUERY_CONTEXT_COLUMNS, "snapshot_date"])
+    current = current.sort_values([*MOVEMENT_CONTEXT_KEY, "snapshot_date"])
 
     previous_columns = [
         "snapshot_date",
