@@ -34,6 +34,7 @@ from tourism_pricing_analytics.scraping.booking.config import (
 )
 from tourism_pricing_analytics.scraping.booking.discovery import (
     DEFAULT_SEARCH_AREAS,
+    SELF_CATERING_HT_IDS,
     DiscoveryConfig,
     discover_candidates,
 )
@@ -51,6 +52,18 @@ def parse_args() -> argparse.Namespace:
         dest="areas",
         default=None,
         help="Search destination string. Repeatable. Defaults to the Gerani strip.",
+    )
+    parser.add_argument(
+        "--ht-id",
+        action="append",
+        dest="ht_ids",
+        type=int,
+        default=None,
+        help=(
+            "Booking property-type filter code (ht_id). Repeatable. Defaults to "
+            "self-catering: 201 Apartments, 213 Villas, 220 Holiday homes. "
+            "Add 216 to include Guest houses."
+        ),
     )
     parser.add_argument("--max-per-area", type=int, default=DiscoveryConfig.max_per_area)
     parser.add_argument("--max-total", type=int, default=DiscoveryConfig.max_total)
@@ -89,8 +102,10 @@ def main() -> None:
     random.seed(scraper_config.seed)
 
     areas = tuple(args.areas) if args.areas else DEFAULT_SEARCH_AREAS
+    ht_ids = tuple(args.ht_ids) if args.ht_ids else SELF_CATERING_HT_IDS
     discovery_config = DiscoveryConfig(
         areas=areas,
+        ht_ids=ht_ids,
         max_per_area=args.max_per_area,
         max_total=args.max_total,
         max_pages_per_area=args.max_pages_per_area,
@@ -126,6 +141,7 @@ def main() -> None:
     except ValueError:
         display_out = resolved_out
     print(f"Areas searched: {len(areas)}")
+    print(f"Property-type filter (ht_id): {', '.join(str(code) for code in ht_ids)}")
     print(f"Excluded already-configured URLs: {len(exclude_urls)}")
     print(f"Discovered {len(candidates)} new candidate properties")
     print(f"Wrote {display_out}")
