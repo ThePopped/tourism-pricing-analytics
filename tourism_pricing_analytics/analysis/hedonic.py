@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 import numpy as np
 import pandas as pd
 import statsmodels.api as sm
-from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.ensemble import GradientBoostingRegressor, HistGradientBoostingRegressor
 from sklearn.metrics import mean_absolute_error, r2_score
 from sklearn.model_selection import GroupKFold
 
@@ -18,6 +18,54 @@ from tourism_pricing_analytics.analysis.segment import segment_self_catering
 from tourism_pricing_analytics.features.encoders import normalize_amenity
 
 RANDOM_SEED = 10001
+
+# Booster families evaluated in the grouped-CV bake-off. The winner becomes the
+# shipped ``bundle.gbm_model``; the loser stays reproducible via the same search.
+GBR_FAMILY = "gradient_boosting"
+HIST_FAMILY = "hist_gradient_boosting"
+
+# Fixed params used on the non-tuned (fast / back-compatible) path. These are the
+# historical defaults the tuner is expected to beat.
+DEFAULT_GBR_PARAMS: dict[str, Any] = {
+    "n_estimators": 160,
+    "learning_rate": 0.04,
+    "max_depth": 3,
+    "min_samples_leaf": 2,
+}
+
+# Small, sensible random-search spaces. Kept deliberately compact -- the design
+# matrix is wide (hundreds of multi-hot columns on ~1.5k rows), so each fit is
+# not cheap and a bloated grid buys little. ``max_features`` and subsampling do
+# most of the regularization work against that width.
+DEFAULT_SEARCH_SPACES: dict[str, dict[str, tuple]] = {
+    GBR_FAMILY: {
+        "n_estimators": (150, 200, 300),
+        "learning_rate": (0.02, 0.03, 0.05),
+        "max_depth": (2, 3),
+        "min_samples_leaf": (2, 3, 5),
+        "subsample": (0.6, 0.8),
+        "max_features": (0.4, 0.6, 0.8),
+    },
+    HIST_FAMILY: {
+        "max_iter": (200, 300, 400),
+        "learning_rate": (0.03, 0.05, 0.08),
+        "max_leaf_nodes": (15, 31),
+        "min_samples_leaf": (10, 20, 30),
+        "l2_regularization": (0.0, 0.1, 1.0),
+        "max_features": (0.5, 0.7, 1.0),
+    },
+}
+
+# Amenity/facility frequency floors tried during tuning (an outer search
+# dimension because each floor rebuilds the design matrix). Lower floors add
+# columns, so keep the grid short.
+DEFAULT_TOKEN_FREQUENCY_GRID: tuple[int, ...] = (15, 25)
+
+DEFAULT_SEARCH_N_ITER = 16
+
+# Parallelism for the config search. -1 uses all cores; the per-fit matrix is a
+# few MB so process fan-out is cheap in memory.
+DEFAULT_SEARCH_N_JOBS = -1
 
 IDENTIFIER_OR_LEAKAGE_COLUMNS = {
     "property_name",
@@ -118,10 +166,14 @@ class HedonicModelBundle:
 
     feature_meta: HedonicFeatureMeta
     ols_results: Any
-    gbm_model: GradientBoostingRegressor
-    cv_metrics: dict[str, float | int | None]
+    gbm_model: Any
+    cv_metrics: dict[str, Any]
     training_rows: int
     training_properties: int
+    model_family: str = GBR_FAMILY
+    model_params: dict[str, Any] = field(default_factory=dict)
+    min_token_frequency: int = 25
+    search_leaderboard: tuple[dict[str, Any], ...] = ()
 
 
 def _is_missing(value: object) -> bool:
@@ -438,29 +490,31 @@ def train_ols(
     return model.fit(cov_type="HC3")
 
 
-def train_gradient_boosting(
-    X: pd.DataFrame,
-    y: pd.Series,
-    groups: pd.Series,
-    meta: HedonicFeatureMeta,
-    *,
-    random_state: int = RANDOM_SEED,
-) -> tuple[GradientBoostingRegressor, dict[str, float | int | None]]:
-    """Fit grouped-validation gradient boosting and return final model + metrics."""
+def _make_estimator(family: str, params: dict[str, Any], random_state: int) -> Any:
+    """Construct an unfitted booster for ``family`` with ``params``."""
 
-    feature_frame = X.loc[:, list(meta.gbm_feature_columns)]
-    splits = group_kfold_splits(groups)
+    if family == HIST_FAMILY:
+        return HistGradientBoostingRegressor(random_state=random_state, **params)
+    if family == GBR_FAMILY:
+        return GradientBoostingRegressor(random_state=random_state, **params)
+    raise HedonicModelError(f"Unknown booster family: {family}")
+
+
+def _cv_score_params(
+    feature_frame: pd.DataFrame,
+    y: pd.Series,
+    splits: list[tuple[np.ndarray, np.ndarray]],
+    family: str,
+    params: dict[str, Any],
+    random_state: int,
+) -> dict[str, float | int]:
+    """Mean out-of-sample metrics for one ``(family, params)`` over grouped folds."""
+
     fold_metrics: list[dict[str, float]] = []
     for train_idx, test_idx in splits:
-        fold_model = GradientBoostingRegressor(
-            random_state=random_state,
-            n_estimators=160,
-            learning_rate=0.04,
-            max_depth=3,
-            min_samples_leaf=2,
-        )
-        fold_model.fit(feature_frame.iloc[train_idx], y.iloc[train_idx])
-        predictions = pd.Series(fold_model.predict(feature_frame.iloc[test_idx]), index=y.iloc[test_idx].index)
+        model = _make_estimator(family, params, random_state)
+        model.fit(feature_frame.iloc[train_idx], y.iloc[train_idx])
+        predictions = pd.Series(model.predict(feature_frame.iloc[test_idx]), index=y.iloc[test_idx].index)
         actual = y.iloc[test_idx]
         fold_metrics.append(
             {
@@ -469,45 +523,236 @@ def train_gradient_boosting(
                 "mae_eur": float(mean_absolute_error(np.exp(actual), np.exp(predictions))),
             }
         )
+    return {
+        "folds": len(fold_metrics),
+        "r2_log_mean": float(np.mean([item["r2_log"] for item in fold_metrics])),
+        "mae_log_mean": float(np.mean([item["mae_log"] for item in fold_metrics])),
+        "mae_eur_mean": float(np.mean([item["mae_eur"] for item in fold_metrics])),
+    }
 
-    final_model = GradientBoostingRegressor(
-        random_state=random_state,
-        n_estimators=160,
-        learning_rate=0.04,
-        max_depth=3,
-        min_samples_leaf=2,
-    )
-    final_model.fit(feature_frame, y)
 
-    if not fold_metrics:
-        metrics: dict[str, float | int | None] = {
-            "folds": 0,
-            "r2_log_mean": None,
-            "mae_log_mean": None,
-            "mae_eur_mean": None,
-        }
+def _sample_param_configs(
+    space: dict[str, tuple],
+    n_iter: int,
+    seed: int,
+) -> list[dict[str, Any]]:
+    """Deterministically sample up to ``n_iter`` unique configs from ``space``."""
+
+    keys = sorted(space)
+    rng = np.random.RandomState(seed)
+    seen: set[tuple] = set()
+    configs: list[dict[str, Any]] = []
+    # Bounded attempts so a small grid does not spin forever chasing uniqueness.
+    for _ in range(n_iter * 20):
+        if len(configs) >= n_iter:
+            break
+        choice = tuple(space[key][rng.randint(len(space[key]))] for key in keys)
+        if choice in seen:
+            continue
+        seen.add(choice)
+        configs.append(dict(zip(keys, choice)))
+    return configs
+
+
+def grouped_random_search(
+    feature_frame: pd.DataFrame,
+    y: pd.Series,
+    groups: pd.Series,
+    family: str,
+    *,
+    space: dict[str, tuple] | None = None,
+    n_iter: int = DEFAULT_SEARCH_N_ITER,
+    splits: list[tuple[np.ndarray, np.ndarray]] | None = None,
+    seed: int = RANDOM_SEED,
+    n_jobs: int = 1,
+) -> dict[str, Any] | None:
+    """Randomly search ``family`` under GroupKFold; return the best config + metrics.
+
+    Scored by mean out-of-sample EUR/night MAE (lower is better), ties broken by
+    higher mean log R2. Returns ``None`` when there are too few groups to split.
+    Config scoring is embarrassingly parallel; ``n_jobs`` fans it out while the
+    deterministic winner selection stays independent of evaluation order.
+    """
+
+    space = space or DEFAULT_SEARCH_SPACES[family]
+    fold_splits = splits if splits is not None else group_kfold_splits(groups)
+    if not fold_splits:
+        return None
+    configs = _sample_param_configs(space, n_iter, seed)
+    if n_jobs == 1 or len(configs) <= 1:
+        scored = [_cv_score_params(feature_frame, y, fold_splits, family, params, seed) for params in configs]
     else:
-        metrics = {
-            "folds": len(fold_metrics),
-            "r2_log_mean": float(np.mean([item["r2_log"] for item in fold_metrics])),
-            "mae_log_mean": float(np.mean([item["mae_log"] for item in fold_metrics])),
-            "mae_eur_mean": float(np.mean([item["mae_eur"] for item in fold_metrics])),
-        }
+        from joblib import Parallel, delayed
+
+        scored = Parallel(n_jobs=n_jobs)(
+            delayed(_cv_score_params)(feature_frame, y, fold_splits, family, params, seed)
+            for params in configs
+        )
+    best: dict[str, Any] | None = None
+    for params, metrics in zip(configs, scored):
+        candidate = {"family": family, "params": params, "metrics": metrics}
+        if best is None or _is_better(metrics, best["metrics"]):
+            best = candidate
+    return best
+
+
+def _is_better(candidate: dict[str, float | int], incumbent: dict[str, float | int]) -> bool:
+    """Lower EUR MAE wins; ties broken by higher log R2."""
+
+    cand_mae = candidate["mae_eur_mean"]
+    inc_mae = incumbent["mae_eur_mean"]
+    if not math.isclose(cand_mae, inc_mae, rel_tol=1e-9, abs_tol=1e-9):
+        return cand_mae < inc_mae
+    return candidate["r2_log_mean"] > incumbent["r2_log_mean"]
+
+
+def train_gradient_boosting(
+    X: pd.DataFrame,
+    y: pd.Series,
+    groups: pd.Series,
+    meta: HedonicFeatureMeta,
+    *,
+    family: str = GBR_FAMILY,
+    params: dict[str, Any] | None = None,
+    random_state: int = RANDOM_SEED,
+) -> tuple[Any, dict[str, Any]]:
+    """Fit one grouped-validated booster and return the refit model + CV metrics."""
+
+    resolved = dict(params if params is not None else DEFAULT_GBR_PARAMS)
+    feature_frame = X.loc[:, list(meta.gbm_feature_columns)]
+    splits = group_kfold_splits(groups)
+    if splits:
+        metrics = _cv_score_params(feature_frame, y, splits, family, resolved, random_state)
+    else:
+        metrics = {"folds": 0, "r2_log_mean": None, "mae_log_mean": None, "mae_eur_mean": None}
+
+    final_model = _make_estimator(family, resolved, random_state)
+    final_model.fit(feature_frame, y)
     return final_model, metrics
+
+
+def tune_hedonic_booster(
+    segment: pd.DataFrame,
+    *,
+    token_frequency_grid: Iterable[int] = DEFAULT_TOKEN_FREQUENCY_GRID,
+    families: Iterable[str] = (GBR_FAMILY, HIST_FAMILY),
+    search_spaces: dict[str, dict[str, tuple]] | None = None,
+    n_iter: int = DEFAULT_SEARCH_N_ITER,
+    n_jobs: int = DEFAULT_SEARCH_N_JOBS,
+    random_state: int = RANDOM_SEED,
+) -> dict[str, Any] | None:
+    """Bake-off across token-frequency floors x booster families under GroupKFold.
+
+    Returns the winning ``{min_token_frequency, family, params, metrics}`` plus a
+    compact ``leaderboard`` of the best config per (floor, family), or ``None``
+    when no floor yields enough groups to cross-validate.
+    """
+
+    spaces = search_spaces or DEFAULT_SEARCH_SPACES
+    leaderboard: list[dict[str, Any]] = []
+    winner: dict[str, Any] | None = None
+    for min_token_frequency in token_frequency_grid:
+        X, y, groups, meta = build_design_matrix(segment, min_token_frequency=min_token_frequency)
+        feature_frame = X.loc[:, list(meta.gbm_feature_columns)]
+        splits = group_kfold_splits(groups)
+        if not splits:
+            continue
+        for family in families:
+            best = grouped_random_search(
+                feature_frame,
+                y,
+                groups,
+                family,
+                space=spaces.get(family),
+                n_iter=n_iter,
+                splits=splits,
+                seed=random_state,
+                n_jobs=n_jobs,
+            )
+            if best is None:
+                continue
+            entry = {
+                "min_token_frequency": int(min_token_frequency),
+                "family": best["family"],
+                "params": best["params"],
+                "metrics": best["metrics"],
+            }
+            leaderboard.append(entry)
+            if winner is None or _is_better(entry["metrics"], winner["metrics"]):
+                winner = entry
+    if winner is None:
+        return None
+    leaderboard.sort(key=lambda item: item["metrics"]["mae_eur_mean"])
+    winner = dict(winner)
+    winner["leaderboard"] = leaderboard
+    return winner
 
 
 def fit_hedonic_models(
     frame: pd.DataFrame,
     *,
     include_guest_house: bool = False,
-    min_token_frequency: int = 25,
+    min_token_frequency: int | None = None,
+    tune: bool = False,
+    token_frequency_grid: Iterable[int] = DEFAULT_TOKEN_FREQUENCY_GRID,
+    search_n_iter: int = DEFAULT_SEARCH_N_ITER,
+    search_n_jobs: int = DEFAULT_SEARCH_N_JOBS,
+    search_spaces: dict[str, dict[str, tuple]] | None = None,
+    model_params: dict[str, Any] | None = None,
+    model_family: str = GBR_FAMILY,
 ) -> HedonicModelBundle:
-    """Train OLS and grouped gradient boosting on the self-catering segment."""
+    """Train OLS and a grouped-CV booster on the self-catering segment.
+
+    Fast by default (fixed params) so interactive callers stay responsive. Two
+    ways to get the tuned booster:
+
+    - ``tune=True`` runs the GBM-vs-HistGBM bake-off over the token-frequency grid
+      here and now (minutes). Used by the offline tuning script.
+    - ``model_family`` + ``model_params`` (+ ``min_token_frequency``) apply an
+      already-chosen config (e.g. the frozen winner loaded from disk) on the fast
+      path, so reports ship the tuned model without re-searching.
+    """
 
     segment = segment_self_catering(frame, include_guest_house=include_guest_house)
-    X, y, groups, meta = build_design_matrix(segment, min_token_frequency=min_token_frequency)
+
+    winner: dict[str, Any] | None = None
+    if tune and min_token_frequency is None:
+        winner = tune_hedonic_booster(
+            segment,
+            token_frequency_grid=token_frequency_grid,
+            search_spaces=search_spaces,
+            n_iter=search_n_iter,
+            n_jobs=search_n_jobs,
+        )
+
+    if winner is not None:
+        resolved_mtf = winner["min_token_frequency"]
+        family = winner["family"]
+        params = winner["params"]
+        leaderboard = tuple(winner["leaderboard"])
+        cv_metrics: dict[str, Any] = dict(winner["metrics"])
+    else:
+        resolved_mtf = min_token_frequency if min_token_frequency is not None else 25
+        family = model_family
+        params = dict(model_params) if model_params is not None else dict(DEFAULT_GBR_PARAMS)
+        leaderboard = ()
+        cv_metrics = {}
+
+    X, y, groups, meta = build_design_matrix(segment, min_token_frequency=resolved_mtf)
     ols_results = train_ols(X, y, meta)
-    gbm_model, cv_metrics = train_gradient_boosting(X, y, groups, meta)
+    gbm_model, fold_metrics = train_gradient_boosting(X, y, groups, meta, family=family, params=params)
+    if not cv_metrics:
+        cv_metrics = fold_metrics
+    cv_metrics = dict(cv_metrics)
+    cv_metrics.update(
+        {
+            "model_family": family,
+            "model_params": dict(params),
+            "min_token_frequency": int(resolved_mtf),
+            "tuned": winner is not None,
+        }
+    )
+
     return HedonicModelBundle(
         feature_meta=meta,
         ols_results=ols_results,
@@ -515,6 +760,10 @@ def fit_hedonic_models(
         cv_metrics=cv_metrics,
         training_rows=int(segment.shape[0]),
         training_properties=int(segment["property_url"].nunique(dropna=True)),
+        model_family=family,
+        model_params=dict(params),
+        min_token_frequency=int(resolved_mtf),
+        search_leaderboard=leaderboard,
     )
 
 

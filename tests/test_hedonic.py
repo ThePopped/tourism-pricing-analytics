@@ -5,12 +5,17 @@ import pandas as pd
 
 from scripts.run_hedonic import build_report_payload, render_markdown_report
 from tourism_pricing_analytics.analysis.hedonic import (
+    GBR_FAMILY,
+    HIST_FAMILY,
     build_design_matrix,
     explain_price_gap,
     feature_adjusted_peer_prices,
     fit_hedonic_models,
     group_kfold_splits,
+    grouped_random_search,
+    tune_hedonic_booster,
 )
+from tourism_pricing_analytics.analysis.segment import segment_self_catering
 
 
 def _row(
@@ -236,6 +241,92 @@ class HedonicModelTests(unittest.TestCase):
         self.assertEqual(payload["benchmark"]["coverage"]["peer_price_rows"], 3)
         self.assertIn("Comparable source table: `local.parquet`", report)
         self.assertIn("Hedonic training table: `broad.parquet`", report)
+
+
+class HedonicTuningTests(unittest.TestCase):
+    SMALL_GRID = [1, 2]
+    SMALL_SPACES = {
+        GBR_FAMILY: {
+            "n_estimators": (60, 120),
+            "learning_rate": (0.03, 0.05),
+            "max_depth": (2, 3),
+            "min_samples_leaf": (2, 3),
+            "subsample": (0.8, 1.0),
+            "max_features": (0.6, 1.0),
+        },
+        HIST_FAMILY: {
+            "max_iter": (80, 150),
+            "learning_rate": (0.05, 0.08),
+            "max_leaf_nodes": (15, 31),
+            "min_samples_leaf": (5, 10),
+            "l2_regularization": (0.0, 1.0),
+            "max_features": (0.7, 1.0),
+        },
+    }
+
+    def _tune(self):
+        return tune_hedonic_booster(
+            segment_self_catering(sample_hedonic_frame()),
+            token_frequency_grid=self.SMALL_GRID,
+            search_spaces=self.SMALL_SPACES,
+            n_iter=4,
+            n_jobs=1,
+        )
+
+    def test_bakeoff_selects_a_valid_winner_with_leaderboard(self) -> None:
+        winner = self._tune()
+        self.assertIsNotNone(winner)
+        self.assertIn(winner["family"], {GBR_FAMILY, HIST_FAMILY})
+        self.assertIn(winner["min_token_frequency"], self.SMALL_GRID)
+        self.assertLessEqual(
+            set(winner["params"]), set(self.SMALL_SPACES[winner["family"]])
+        )
+        self.assertGreater(len(winner["leaderboard"]), 0)
+        # Leaderboard is sorted best-first by EUR MAE and the winner leads it.
+        maes = [entry["metrics"]["mae_eur_mean"] for entry in winner["leaderboard"]]
+        self.assertEqual(maes, sorted(maes))
+        self.assertAlmostEqual(maes[0], winner["metrics"]["mae_eur_mean"])
+
+    def test_bakeoff_is_deterministic(self) -> None:
+        first, second = self._tune(), self._tune()
+        self.assertEqual(first["family"], second["family"])
+        self.assertEqual(first["params"], second["params"])
+        self.assertEqual(first["min_token_frequency"], second["min_token_frequency"])
+        self.assertAlmostEqual(
+            first["metrics"]["mae_eur_mean"], second["metrics"]["mae_eur_mean"]
+        )
+
+    def test_parallel_search_matches_serial(self) -> None:
+        segment = segment_self_catering(sample_hedonic_frame())
+        X, y, groups, meta = build_design_matrix(segment, min_token_frequency=1)
+        feature_frame = X.loc[:, list(meta.gbm_feature_columns)]
+        kwargs = dict(space=self.SMALL_SPACES[GBR_FAMILY], n_iter=4)
+        serial = grouped_random_search(feature_frame, y, groups, GBR_FAMILY, n_jobs=1, **kwargs)
+        parallel = grouped_random_search(feature_frame, y, groups, GBR_FAMILY, n_jobs=2, **kwargs)
+        self.assertEqual(serial["params"], parallel["params"])
+        self.assertAlmostEqual(
+            serial["metrics"]["mae_eur_mean"], parallel["metrics"]["mae_eur_mean"]
+        )
+
+    def test_fit_records_tuning_metadata(self) -> None:
+        bundle = fit_hedonic_models(
+            sample_hedonic_frame(),
+            tune=True,
+            token_frequency_grid=self.SMALL_GRID,
+            search_spaces=self.SMALL_SPACES,
+            search_n_iter=4,
+            search_n_jobs=1,
+        )
+        self.assertTrue(bundle.cv_metrics["tuned"])
+        self.assertEqual(bundle.cv_metrics["model_family"], bundle.model_family)
+        self.assertEqual(bundle.cv_metrics["min_token_frequency"], bundle.min_token_frequency)
+        self.assertEqual(bundle.model_params, bundle.cv_metrics["model_params"])
+
+    def test_explicit_token_frequency_takes_fast_fixed_path(self) -> None:
+        bundle = fit_hedonic_models(sample_hedonic_frame(), min_token_frequency=1)
+        self.assertFalse(bundle.cv_metrics["tuned"])
+        self.assertEqual(bundle.model_family, GBR_FAMILY)
+        self.assertEqual(bundle.min_token_frequency, 1)
 
 
 if __name__ == "__main__":
