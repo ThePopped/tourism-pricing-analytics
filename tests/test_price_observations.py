@@ -17,6 +17,7 @@ from scripts.append_price_observations import (
     build_price_observations_from_run,
     find_latest_run_dir,
     main as append_history_main,
+    observation_rows_from_features,
 )
 from tourism_pricing_analytics.analysis.movement import (
     AVAILABILITY_STATUS_AVAILABLE,
@@ -217,6 +218,24 @@ class PriceObservationContractTests(unittest.TestCase):
         self.assertEqual(normalized.loc[0, "checkout"], pd.Timestamp("2026-07-19"))
         self.assertEqual(normalized.loc[0, "captured_at"], pd.Timestamp("2026-06-30T09:15:00"))
 
+    def test_price_observation_allows_missing_geo_coordinates(self) -> None:
+        frame = pd.DataFrame(
+            [
+                sample_price_observation(latitude=None, longitude=None),
+                sample_price_observation(
+                    room_id="102",
+                    block_id="102_2026-07-15_2026-07-19",
+                    latitude="not captured",
+                    longitude="not captured",
+                ),
+            ]
+        )
+
+        normalized = normalize_price_observations(frame)
+
+        self.assertTrue(normalized["latitude"].isna().all())
+        self.assertTrue(normalized["longitude"].isna().all())
+
     def test_price_observation_rejects_bad_dates(self) -> None:
         invalid_date = pd.DataFrame([sample_price_observation(checkin="not-a-date")])
         with self.assertRaisesRegex(MovementHistoryError, "unparsable date"):
@@ -292,6 +311,23 @@ class OfferPresenceContractTests(unittest.TestCase):
         self.assertEqual(normalized.loc[0, "checkout"], pd.Timestamp("2026-07-19"))
         self.assertEqual(normalized.loc[0, "captured_at"], pd.Timestamp("2026-06-30T09:15:00"))
 
+    def test_presence_allows_missing_geo_coordinates(self) -> None:
+        frame = pd.DataFrame(
+            [
+                sample_offer_presence(latitude=None, longitude=None),
+                sample_offer_presence(
+                    property_url="https://example.test/apartment-two",
+                    latitude="not captured",
+                    longitude="not captured",
+                ),
+            ]
+        )
+
+        normalized = normalize_offer_presence(frame)
+
+        self.assertTrue(normalized["latitude"].isna().all())
+        self.assertTrue(normalized["longitude"].isna().all())
+
     def test_presence_dedupe_key_preserves_query_context_without_offer_identity(self) -> None:
         rows = [
             sample_offer_presence(),
@@ -342,6 +378,53 @@ class AppendPriceObservationsTests(unittest.TestCase):
         self.assertEqual(frame.loc[0, "market"], "Chania")
         self.assertEqual(frame.loc[0, "property_type"], "Apartment")
         self.assertEqual(frame.loc[0, "price_per_night"], 125.0)
+
+    def test_observation_rows_use_property_context_for_sparse_feature_rows(self) -> None:
+        feature = sample_price_observation(
+            property_name=None,
+            property_type=None,
+            latitude=None,
+            longitude=None,
+        )
+        context = {
+            str(feature["property_url"]): {
+                "property_name": "Apartment One",
+                "property_type": "Apartment",
+                "latitude": 35.515,
+                "longitude": 24.018,
+            }
+        }
+
+        frame = observation_rows_from_features(
+            [feature],
+            run_id="20260630_091500_000000",
+            property_context=context,
+        )
+
+        self.assertEqual(frame.loc[0, "property_name"], "Apartment One")
+        self.assertEqual(frame.loc[0, "property_type"], "Apartment")
+        self.assertEqual(frame.loc[0, "latitude"], 35.515)
+        self.assertEqual(frame.loc[0, "longitude"], 24.018)
+
+    def test_observation_rows_drop_missing_offer_identity_rows(self) -> None:
+        rows = [
+            sample_price_observation(room_id=None),
+            sample_price_observation(
+                room_id="102",
+                room_name="Garden Studio",
+                block_id="102_2026-07-15_2026-07-19",
+                current_price_value=560.0,
+            ),
+        ]
+
+        frame = observation_rows_from_features(
+            rows,
+            run_id="20260630_091500_000000",
+        )
+
+        self.assertEqual(len(frame), 1)
+        self.assertEqual(frame.loc[0, "room_id"], "102")
+        self.assertEqual(frame.attrs["dropped_invalid_observation_identity_rows"], 1)
 
     def test_append_writes_parquet_and_dedupes_repeated_observations(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

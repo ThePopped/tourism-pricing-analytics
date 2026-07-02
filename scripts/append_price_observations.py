@@ -30,6 +30,7 @@ from tourism_pricing_analytics.scraping.booking.validation import load_jsonl_rec
 DEFAULT_RUNS_ROOT = REPO_ROOT / "saved_dom" / "runs"
 DEFAULT_OBSERVATIONS_OUT = REPO_ROOT / "data" / "modelling" / "price_observations.parquet"
 DEFAULT_PRESENCE_OUT = REPO_ROOT / "data" / "modelling" / "offer_presence.parquet"
+OBSERVATION_IDENTITY_COLUMNS = ("room_id", "room_name", "block_id")
 
 
 def find_latest_run_dir(runs_root: Path) -> Path:
@@ -112,10 +113,19 @@ def _context_value(
     return default
 
 
+def _missing_or_blank_mask(frame: pd.DataFrame, columns: tuple[str, ...]) -> pd.Series:
+    mask = pd.Series(False, index=frame.index)
+    for column in columns:
+        values = frame[column].astype("string")
+        mask |= frame[column].isna() | values.str.strip().eq("")
+    return mask
+
+
 def observation_rows_from_features(
     feature_rows: list[dict],
     *,
     run_id: str,
+    property_context: dict[str, dict[str, object]] | None = None,
     adults: int = 2,
     children: int = 0,
     rooms: int = 1,
@@ -124,6 +134,7 @@ def observation_rows_from_features(
 ) -> pd.DataFrame:
     """Normalize feature rows to the price-observation schema."""
 
+    property_context = property_context or _property_context_from_rows(feature_rows)
     rows: list[dict[str, object]] = []
     for row in feature_rows:
         observation = {
@@ -131,7 +142,7 @@ def observation_rows_from_features(
             "captured_at": row.get("captured_at"),
             "run_id": row.get("run_id") or run_id,
             "property_url": row.get("property_url"),
-            "property_name": row.get("property_name"),
+            "property_name": _context_value(row, property_context, "property_name"),
             "room_id": row.get("room_id"),
             "room_name": row.get("room_name"),
             "block_id": row.get("block_id"),
@@ -146,14 +157,20 @@ def observation_rows_from_features(
             "market": row.get("market") or market,
             "price_per_night": row.get("price_per_night"),
             "current_price_value": row.get("current_price_value"),
-            "property_type": row.get("property_type"),
-            "latitude": row.get("latitude"),
-            "longitude": row.get("longitude"),
+            "property_type": _context_value(row, property_context, "property_type", "Unknown"),
+            "latitude": _context_value(row, property_context, "latitude"),
+            "longitude": _context_value(row, property_context, "longitude"),
         }
         rows.append(observation)
 
     frame = pd.DataFrame(rows, columns=PRICE_OBSERVATION_COLUMNS)
-    return normalize_price_observations(frame).loc[:, list(PRICE_OBSERVATION_COLUMNS)]
+    invalid_identity = _missing_or_blank_mask(frame, OBSERVATION_IDENTITY_COLUMNS)
+    dropped_identity_rows = int(invalid_identity.sum())
+    if dropped_identity_rows:
+        frame = frame.loc[~invalid_identity].reset_index(drop=True)
+    normalized = normalize_price_observations(frame).loc[:, list(PRICE_OBSERVATION_COLUMNS)]
+    normalized.attrs["dropped_invalid_observation_identity_rows"] = dropped_identity_rows
+    return normalized
 
 
 def presence_rows_from_run_records(
@@ -246,9 +263,13 @@ def build_price_observations_from_run(
     """Build price observations from an existing scrape run directory."""
 
     feature_rows = build_features_from_run(run_dir)
+    property_context = _property_context_from_rows(
+        feature_rows + _load_optional_jsonl(run_dir, "property_features.jsonl")
+    )
     return observation_rows_from_features(
         feature_rows,
         run_id=run_dir.name,
+        property_context=property_context,
         adults=adults,
         children=children,
         rooms=rooms,
@@ -408,6 +429,7 @@ def append_history_from_run(
     observations = observation_rows_from_features(
         feature_rows,
         run_id=run_dir.name,
+        property_context=property_context,
         adults=adults,
         children=children,
         rooms=rooms,

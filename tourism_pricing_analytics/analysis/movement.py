@@ -320,11 +320,14 @@ def _normalize_numeric_columns(
     frame: pd.DataFrame,
     columns: Iterable[str],
     label: str,
+    *,
+    nullable_columns: Iterable[str] = (),
 ) -> pd.DataFrame:
     out = frame.copy()
+    nullable = set(nullable_columns)
     for column in columns:
         out[column] = pd.to_numeric(out[column], errors="coerce")
-    bad = [column for column in columns if out[column].isna().any()]
+    bad = [column for column in columns if column not in nullable and out[column].isna().any()]
     if bad:
         raise MovementHistoryError(
             f"{label} has non-numeric values in: {', '.join(bad)}"
@@ -373,7 +376,12 @@ def normalize_price_observations(frame: pd.DataFrame) -> pd.DataFrame:
     label = "price observations"
     _require_columns(frame, PRICE_OBSERVATION_COLUMNS, label)
     out = _normalize_temporal_columns(frame, label)
-    out = _normalize_numeric_columns(out, OBSERVATION_NUMERIC_COLUMNS, label)
+    out = _normalize_numeric_columns(
+        out,
+        OBSERVATION_NUMERIC_COLUMNS,
+        label,
+        nullable_columns=NUMERIC_CONTEXT_COLUMNS,
+    )
     _validate_non_null(out, NON_NULL_OBSERVATION_COLUMNS, label)
     _validate_non_empty_strings(
         out,
@@ -408,7 +416,12 @@ def normalize_offer_presence(frame: pd.DataFrame) -> pd.DataFrame:
     label = "offer presence"
     _require_columns(frame, OFFER_PRESENCE_COLUMNS, label)
     out = _normalize_temporal_columns(frame, label)
-    out = _normalize_numeric_columns(out, PRESENCE_NUMERIC_COLUMNS, label)
+    out = _normalize_numeric_columns(
+        out,
+        PRESENCE_NUMERIC_COLUMNS,
+        label,
+        nullable_columns=NUMERIC_CONTEXT_COLUMNS,
+    )
     _validate_non_null(out, NON_NULL_PRESENCE_COLUMNS, label)
     _validate_non_empty_strings(
         out,
