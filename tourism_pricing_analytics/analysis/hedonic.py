@@ -183,6 +183,14 @@ class HedonicModelBundle:
     model_params: dict[str, Any] = field(default_factory=dict)
     min_token_frequency: int = 25
     search_leaderboard: tuple[dict[str, Any], ...] = ()
+    # Out-of-fold log-scale residuals (actual - predicted) collected over the
+    # grouped folds; the basis for the split-conformal prediction band.
+    conformal_residuals: np.ndarray = field(default_factory=lambda: np.empty(0))
+    # Coverage the band + optional quantile models were calibrated for.
+    conformal_coverage: float = 0.8
+    # Optional feature-dependent width: {"lower": model, "upper": model} of
+    # HistGBM quantile regressors at the conformal coverage's tail quantiles.
+    quantile_models: dict[str, Any] = field(default_factory=dict)
 
 
 def _is_missing(value: object) -> bool:
@@ -748,6 +756,8 @@ def fit_hedonic_models(
     search_spaces: dict[str, dict[str, tuple]] | None = None,
     model_params: dict[str, Any] | None = None,
     model_family: str = GBR_FAMILY,
+    conformal_coverage: float = 0.8,
+    fit_quantile_models: bool = True,
 ) -> HedonicModelBundle:
     """Train OLS and a grouped-CV booster on the self-catering segment.
 
@@ -791,6 +801,19 @@ def fit_hedonic_models(
     gbm_model, fold_metrics = train_gradient_boosting(X, y, groups, meta, family=family, params=params)
     if not cv_metrics:
         cv_metrics = fold_metrics
+
+    # Calibrate the prediction band on the same grouped folds the booster is
+    # validated over, so the reported ± reflects out-of-property error.
+    feature_frame = X.loc[:, list(meta.gbm_feature_columns)]
+    conformal_residuals = grouped_conformal_residuals(
+        feature_frame, y, groups, family, params
+    )
+    quantile_models = (
+        _fit_quantile_models(feature_frame, y, coverage=conformal_coverage)
+        if fit_quantile_models
+        else {}
+    )
+
     cv_metrics = dict(cv_metrics)
     cv_metrics.update(
         {
@@ -798,6 +821,8 @@ def fit_hedonic_models(
             "model_params": dict(params),
             "min_token_frequency": int(resolved_mtf),
             "tuned": winner is not None,
+            "conformal_coverage": float(conformal_coverage),
+            "conformal_residual_count": int(conformal_residuals.size),
         }
     )
 
@@ -812,6 +837,9 @@ def fit_hedonic_models(
         model_params=dict(params),
         min_token_frequency=int(resolved_mtf),
         search_leaderboard=leaderboard,
+        conformal_residuals=conformal_residuals,
+        conformal_coverage=float(conformal_coverage),
+        quantile_models=quantile_models,
     )
 
 
@@ -827,6 +855,176 @@ def predict_prices(bundle: HedonicModelBundle, rows: pd.DataFrame) -> pd.Series:
     """Predict EUR/night with the fitted gradient-boosting model."""
 
     return np.exp(predict_log_prices(bundle, rows)).rename("predicted_price_per_night")
+
+
+# --------------------------------------------------------------------------- #
+# Prediction uncertainty
+#
+# The point prediction is a false-precision headline on its own. Grouped
+# split-conformal turns the model's *own* out-of-sample error distribution into
+# a band: we collect log-scale residuals on held-out properties (GroupKFold by
+# ``property_url``, so a property never calibrates its own interval), then read
+# tail quantiles of those residuals. Because the folds group by property, the
+# band reflects genuine cross-property generalization error, not in-sample fit.
+# Conformal is the reported headline; the optional HistGBM quantile models give
+# a feature-dependent width for callers that want it.
+# --------------------------------------------------------------------------- #
+
+
+def grouped_conformal_residuals(
+    feature_frame: pd.DataFrame,
+    y: pd.Series,
+    groups: pd.Series,
+    family: str,
+    params: dict[str, Any],
+    *,
+    random_state: int = RANDOM_SEED,
+    splits: list[tuple[np.ndarray, np.ndarray]] | None = None,
+) -> np.ndarray:
+    """Out-of-fold log-scale residuals ``actual - predicted`` over grouped folds.
+
+    Each fold refits the chosen booster on the training groups and predicts the
+    held-out groups, so every residual comes from a property the fold's model
+    never saw. Returns an empty array when there are too few groups to split.
+    """
+
+    fold_splits = splits if splits is not None else group_kfold_splits(groups)
+    if not fold_splits:
+        return np.empty(0, dtype=float)
+    residuals: list[np.ndarray] = []
+    for train_idx, test_idx in fold_splits:
+        model = _make_estimator(family, params, random_state)
+        model.fit(feature_frame.iloc[train_idx], y.iloc[train_idx])
+        predictions = np.asarray(model.predict(feature_frame.iloc[test_idx]), dtype=float)
+        residuals.append(np.asarray(y.iloc[test_idx], dtype=float) - predictions)
+    return np.concatenate(residuals) if residuals else np.empty(0, dtype=float)
+
+
+def _fit_quantile_models(
+    feature_frame: pd.DataFrame,
+    y: pd.Series,
+    *,
+    coverage: float,
+    random_state: int = RANDOM_SEED,
+) -> dict[str, Any]:
+    """Fit lower/upper HistGBM quantile regressors at the coverage's tails."""
+
+    lower_q, upper_q = _coverage_tail_quantiles(coverage)
+    models: dict[str, Any] = {}
+    for name, quantile in (("lower", lower_q), ("upper", upper_q)):
+        model = HistGradientBoostingRegressor(
+            loss="quantile", quantile=quantile, random_state=random_state
+        )
+        model.fit(feature_frame, y)
+        models[name] = model
+    return models
+
+
+def _coverage_tail_quantiles(coverage: float) -> tuple[float, float]:
+    """Two-sided tail quantiles for a central ``coverage`` interval."""
+
+    if not 0.0 < coverage < 1.0:
+        raise HedonicModelError("coverage must be strictly between 0 and 1")
+    lower = (1.0 - coverage) / 2.0
+    return lower, 1.0 - lower
+
+
+def residual_quantiles(residuals: np.ndarray, coverage: float) -> tuple[float, float]:
+    """Asymmetric log-scale residual offsets for a central ``coverage`` band.
+
+    Uses signed-residual quantiles (not symmetric absolute error) so a skewed
+    error distribution yields an asymmetric band. Returns ``(0.0, 0.0)`` when no
+    residuals are available, collapsing the band onto the point prediction.
+    """
+
+    residuals = np.asarray(residuals, dtype=float)
+    if residuals.size == 0:
+        return 0.0, 0.0
+    lower_q, upper_q = _coverage_tail_quantiles(coverage)
+    return float(np.quantile(residuals, lower_q)), float(np.quantile(residuals, upper_q))
+
+
+def prediction_interval(
+    bundle: HedonicModelBundle,
+    rows: pd.DataFrame,
+    *,
+    coverage: float | None = None,
+) -> pd.DataFrame:
+    """Point prediction plus a split-conformal EUR/night band per row.
+
+    ``coverage`` defaults to the bundle's calibrated ``conformal_coverage``. The
+    band is ``exp(pred_log + q_lo)`` .. ``exp(pred_log + q_hi)`` where the offsets
+    are tail quantiles of the grouped out-of-fold residuals -- always ordered
+    ``lower <= point <= upper``.
+    """
+
+    resolved_coverage = bundle.conformal_coverage if coverage is None else coverage
+    log_pred = predict_log_prices(bundle, rows)
+    q_lo, q_hi = residual_quantiles(bundle.conformal_residuals, resolved_coverage)
+    return pd.DataFrame(
+        {
+            "predicted_price_per_night": np.exp(log_pred),
+            "lower_price_per_night": np.exp(log_pred + q_lo),
+            "upper_price_per_night": np.exp(log_pred + q_hi),
+        },
+        index=rows.index,
+    )
+
+
+def price_band(
+    price: float,
+    bundle: HedonicModelBundle,
+    *,
+    coverage: float | None = None,
+) -> dict[str, float]:
+    """Attach a conformal ± band to an already-computed EUR price (e.g. the
+    feature-adjusted peer median or a price gap).
+
+    The residual offsets are multiplicative on the price scale, so the band is
+    ``price * exp(q_lo)`` .. ``price * exp(q_hi)``. This lets deliverables report
+    "adjusted peer median EUR X (EUR lower .. EUR upper)" using the same
+    calibrated width as the per-row model band.
+    """
+
+    resolved_coverage = bundle.conformal_coverage if coverage is None else coverage
+    q_lo, q_hi = residual_quantiles(bundle.conformal_residuals, resolved_coverage)
+    value = float(price)
+    return {
+        "price": value,
+        "lower": value * math.exp(q_lo),
+        "upper": value * math.exp(q_hi),
+        "coverage": float(resolved_coverage),
+    }
+
+
+def quantile_interval(
+    bundle: HedonicModelBundle,
+    rows: pd.DataFrame,
+) -> pd.DataFrame | None:
+    """Feature-dependent EUR/night band from the optional HistGBM quantile models.
+
+    Returns ``None`` when no quantile models were fitted. Lower/upper are sorted
+    per row so numerical crossings never invert the band.
+    """
+
+    models = bundle.quantile_models
+    if not models or "lower" not in models or "upper" not in models:
+        return None
+    X, _, _, _ = build_design_matrix(rows, feature_meta=bundle.feature_meta)
+    feature_frame = X.loc[:, list(bundle.feature_meta.gbm_feature_columns)]
+    lower_log = np.asarray(models["lower"].predict(feature_frame), dtype=float)
+    upper_log = np.asarray(models["upper"].predict(feature_frame), dtype=float)
+    low = np.exp(np.minimum(lower_log, upper_log))
+    high = np.exp(np.maximum(lower_log, upper_log))
+    point = np.exp(predict_log_prices(bundle, rows))
+    return pd.DataFrame(
+        {
+            "predicted_price_per_night": point.to_numpy(),
+            "lower_price_per_night": low,
+            "upper_price_per_night": high,
+        },
+        index=rows.index,
+    )
 
 
 def _mode_or_first(series: pd.Series) -> Any:
