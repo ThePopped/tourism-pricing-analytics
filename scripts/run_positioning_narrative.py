@@ -21,6 +21,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from scripts.run_hedonic import _default_subject_url, _load_spec, _normalize_windows, build_report_payload
 from tourism_pricing_analytics.analysis.competitors import ComparableBenchmarkConfig
+from tourism_pricing_analytics.analysis.hedonic import SELECTED_MIN_TOKEN_FREQUENCY
 from tourism_pricing_analytics.analysis.loader import (
     DEFAULT_HEDONIC_TRAINING_TABLE,
     DEFAULT_MODELLING_TABLE,
@@ -46,7 +47,7 @@ def main() -> None:
     parser.add_argument("--window", action="append", help="Benchmark window as JSON. Repeatable.")
     parser.add_argument("--max-peers", type=int, default=ComparableBenchmarkConfig.max_peers)
     parser.add_argument("--max-distance-km", type=float, default=ComparableBenchmarkConfig.max_distance_km)
-    parser.add_argument("--min-token-frequency", type=int, default=25)
+    parser.add_argument("--min-token-frequency", type=int, default=SELECTED_MIN_TOKEN_FREQUENCY)
     parser.add_argument("--out", type=Path, default=DEFAULT_REPORT_PATH)
     parser.add_argument("--json-out", type=Path, default=None)
     args = parser.parse_args()

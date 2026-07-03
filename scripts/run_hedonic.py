@@ -19,10 +19,12 @@ from tourism_pricing_analytics.analysis.competitors import (
     peer_price_benchmark,
 )
 from tourism_pricing_analytics.analysis.hedonic import (
+    SELECTED_MIN_TOKEN_FREQUENCY,
     HedonicModelBundle,
     explain_price_gap,
     feature_adjusted_peer_prices,
-    fit_hedonic_models,
+    fit_selected_hedonic_models,
+    price_band,
 )
 from tourism_pricing_analytics.analysis.loader import (
     DEFAULT_HEDONIC_TRAINING_TABLE,
@@ -176,6 +178,18 @@ def _fmt_number(value: object, digits: int = 3) -> str:
     return f"{float(value):.{digits}f}"
 
 
+def _fmt_coverage(value: object) -> str:
+    if value is None:
+        return "n/a"
+    return f"{float(value) * 100:.0f}%"
+
+
+def _model_label(params: object) -> str:
+    if not isinstance(params, dict) or not params:
+        return "default parameters"
+    return ", ".join(f"{key}={params[key]}" for key in sorted(params))
+
+
 def _ols_table(payload: dict[str, Any], limit: int = 12) -> list[str]:
     rows = payload["ols_coefficients"][:limit]
     lines = [
@@ -209,8 +223,10 @@ def _gap_lines(gap: dict[str, Any] | None) -> list[str]:
 def render_markdown_report(payload: dict[str, Any]) -> str:
     benchmark = payload["benchmark"]
     adjusted = payload["adjusted_peer_price_distribution"]
+    adjusted_band = payload.get("adjusted_peer_price_band")
     metrics = payload["cv_metrics"]
     gap = payload["gap_explanation"]
+    coverage = payload.get("conformal_coverage", metrics.get("conformal_coverage"))
 
     lines = [
         "# Hedonic Price Adjustment",
@@ -231,6 +247,14 @@ def render_markdown_report(payload: dict[str, Any]) -> str:
         f"- OLS R2: {_fmt_number(payload['ols_r2'])}",
         f"- OLS condition number: {_fmt_number(payload['ols_condition_number'], 1)}",
         "",
+        "## Selected Model",
+        "",
+        f"- Family: {metrics.get('model_family', 'n/a')} (grouped-CV bake-off winner)",
+        f"- Params: {_model_label(metrics.get('model_params'))}",
+        f"- Amenity token floor: {metrics.get('min_token_frequency', 'n/a')}",
+        f"- Prediction band: {_fmt_coverage(coverage)} split-conformal interval from "
+        f"{metrics.get('conformal_residual_count', 'n/a')} out-of-fold residuals",
+        "",
         "## OLS Market Premia",
         "",
         *_ols_table(payload),
@@ -240,6 +264,12 @@ def render_markdown_report(payload: dict[str, Any]) -> str:
         f"- Client: {benchmark['client'].get('property_name') or 'n/a'}",
         f"- Raw peer median: {_fmt_money(benchmark['peer_price_distribution']['median'])}",
         f"- Feature-adjusted peer median: {_fmt_money(adjusted['median'])}",
+        f"- {_fmt_coverage(coverage)} conformal band: "
+        + (
+            f"{_fmt_money(adjusted_band['lower'])} to {_fmt_money(adjusted_band['upper'])}"
+            if adjusted_band
+            else "n/a"
+        ),
         f"- Feature-adjusted IQR: {_fmt_money(adjusted['p25'])} to {_fmt_money(adjusted['p75'])}",
         f"- Adjusted peer rows: {adjusted['count']}",
         "",
@@ -276,13 +306,13 @@ def build_report_payload(
     windows: list[dict[str, Any]] | None = None,
     max_peers: int = ComparableBenchmarkConfig.max_peers,
     max_distance_km: float = ComparableBenchmarkConfig.max_distance_km,
-    min_token_frequency: int = 25,
+    min_token_frequency: int = SELECTED_MIN_TOKEN_FREQUENCY,
     bundle: HedonicModelBundle | None = None,
     training_frame: pd.DataFrame | None = None,
     training_source_table: str | None = None,
 ) -> dict[str, Any]:
     if bundle is None:
-        bundle = fit_hedonic_models(
+        bundle = fit_selected_hedonic_models(
             training_frame if training_frame is not None else frame,
             min_token_frequency=min_token_frequency,
         )
@@ -303,6 +333,10 @@ def build_report_payload(
         _distribution(adjusted_rows["feature_adjusted_price_per_night"])
         if not adjusted_rows.empty
         else _distribution(pd.Series(dtype=float))
+    )
+    adjusted_median = adjusted_distribution["median"]
+    adjusted_band = (
+        price_band(adjusted_median, bundle) if adjusted_median is not None else None
     )
 
     gap = None
@@ -329,6 +363,8 @@ def build_report_payload(
         "ols_coefficients": _coefficient_records(bundle),
         "benchmark": benchmark,
         "adjusted_peer_price_distribution": adjusted_distribution,
+        "adjusted_peer_price_band": adjusted_band,
+        "conformal_coverage": float(bundle.conformal_coverage),
         "adjusted_peer_price_rows": _adjusted_peer_row_records(adjusted_rows),
         "gap_explanation": gap,
     }
@@ -349,7 +385,7 @@ def main() -> None:
     parser.add_argument("--window", action="append", help="Benchmark window as JSON. Repeatable.")
     parser.add_argument("--max-peers", type=int, default=ComparableBenchmarkConfig.max_peers)
     parser.add_argument("--max-distance-km", type=float, default=ComparableBenchmarkConfig.max_distance_km)
-    parser.add_argument("--min-token-frequency", type=int, default=25)
+    parser.add_argument("--min-token-frequency", type=int, default=SELECTED_MIN_TOKEN_FREQUENCY)
     parser.add_argument("--out", type=Path, default=DEFAULT_REPORT_PATH)
     parser.add_argument("--json-out", type=Path, default=None)
     args = parser.parse_args()

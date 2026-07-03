@@ -69,6 +69,23 @@ DEFAULT_SEARCH_SPACES: dict[str, dict[str, tuple]] = {
 # columns, so keep the grid short.
 DEFAULT_TOKEN_FREQUENCY_GRID: tuple[int, ...] = (15, 25)
 
+# Frozen bake-off winner from the Phase A grouped-CV tuning sweep: HistGBM at a
+# token-frequency floor of 15. Reports and the dashboard ship this configuration
+# on the fast path (see ``fit_selected_hedonic_models``) so every deliverable
+# reflects the tuned model without re-running the search each session. The
+# grouped-CV metrics and the conformal band are still recomputed deterministically
+# at fit time, so the reported R2/MAE/± stay honest and reproducible.
+SELECTED_MODEL_FAMILY = HIST_FAMILY
+SELECTED_MODEL_PARAMS: dict[str, Any] = {
+    "l2_regularization": 0.0,
+    "learning_rate": 0.05,
+    "max_features": 0.7,
+    "max_iter": 300,
+    "max_leaf_nodes": 15,
+    "min_samples_leaf": 10,
+}
+SELECTED_MIN_TOKEN_FREQUENCY = 15
+
 DEFAULT_SEARCH_N_ITER = 16
 
 # Parallelism for the config search. -1 uses all cores; the per-fit matrix is a
@@ -840,6 +857,36 @@ def fit_hedonic_models(
         conformal_residuals=conformal_residuals,
         conformal_coverage=float(conformal_coverage),
         quantile_models=quantile_models,
+    )
+
+
+def fit_selected_hedonic_models(
+    frame: pd.DataFrame,
+    *,
+    include_guest_house: bool = False,
+    min_token_frequency: int | None = None,
+    conformal_coverage: float = 0.8,
+    fit_quantile_models: bool = True,
+) -> HedonicModelBundle:
+    """Fit the frozen bake-off winner (see ``SELECTED_MODEL_*``).
+
+    A thin wrapper over :func:`fit_hedonic_models` that pins the tuned family,
+    params, and token-frequency floor so every deliverable ships the same chosen
+    model and the same calibrated prediction band. ``min_token_frequency`` may be
+    overridden (tests use a lower floor on tiny synthetic frames); everything else
+    stays fixed to the selected configuration.
+    """
+
+    return fit_hedonic_models(
+        frame,
+        include_guest_house=include_guest_house,
+        min_token_frequency=(
+            SELECTED_MIN_TOKEN_FREQUENCY if min_token_frequency is None else min_token_frequency
+        ),
+        model_family=SELECTED_MODEL_FAMILY,
+        model_params=dict(SELECTED_MODEL_PARAMS),
+        conformal_coverage=conformal_coverage,
+        fit_quantile_models=fit_quantile_models,
     )
 
 

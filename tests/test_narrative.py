@@ -12,9 +12,20 @@ def _payload(**overrides):
         "training_properties": 154,
         "cv_metrics": {
             "folds": 5,
-            "r2_log_mean": 0.311,
+            "r2_log_mean": 0.327,
             "mae_log_mean": 0.285,
-            "mae_eur_mean": 53.32,
+            "mae_eur_mean": 52.12,
+            "model_family": "hist_gradient_boosting",
+            "min_token_frequency": 15,
+            "conformal_coverage": 0.8,
+            "conformal_residual_count": 1583,
+        },
+        "conformal_coverage": 0.8,
+        "adjusted_peer_price_band": {
+            "price": 237.70,
+            "lower": 170.00,
+            "upper": 330.00,
+            "coverage": 0.8,
         },
         "ols_r2": 0.625,
         "ols_condition_number": 9.4e16,
@@ -83,6 +94,19 @@ class PositioningNarrativeTests(unittest.TestCase):
         self.assertIn("priced above its comparable local rivals", report)
         # Residual premium (306.73 - 237.70) dominates the feature premium here.
         self.assertIn("pricing power", report)
+
+    def test_conformal_band_is_reported(self) -> None:
+        report = render_positioning_narrative(_payload())
+        # The feature-matched median carries its split-conformal ± range, and the
+        # reader is told what that range means.
+        self.assertIn("range for that feature-matched figure", report)
+        self.assertIn("EUR 170.00", report)
+        self.assertIn("EUR 330.00", report)
+        self.assertIn("split-conformal", report)
+
+    def test_missing_band_is_safe(self) -> None:
+        report = render_positioning_narrative(_payload(adjusted_peer_price_band=None))
+        self.assertNotIn("range for that feature-matched figure", report)
 
     def test_distribution_level_decomposition_is_reported(self) -> None:
         report = render_positioning_narrative(_payload())

@@ -207,6 +207,23 @@ def _price_position_lines(payload: dict[str, Any]) -> list[str]:
     ]
 
 
+def _band_phrase(band: dict[str, Any] | None) -> str | None:
+    """Plain-language ± range for the feature-matched median, when available."""
+
+    if not band:
+        return None
+    lower = _num(band.get("lower"))
+    upper = _num(band.get("upper"))
+    coverage = _num(band.get("coverage"))
+    if lower is None or upper is None:
+        return None
+    coverage_text = "" if coverage is None else f"{coverage * 100:.0f}% likely "
+    return (
+        f"- {coverage_text}range for that feature-matched figure: "
+        f"{_fmt_money(lower)} to {_fmt_money(upper)}"
+    )
+
+
 def _premium_lines(
     *,
     raw_peer_median: float | None,
@@ -215,6 +232,7 @@ def _premium_lines(
     feature_premium: float | None,
     residual_premium: float | None,
     gap_payload: dict[str, Any] | None,
+    adjusted_band: dict[str, Any] | None = None,
 ) -> list[str]:
     lines = [
         "A raw price comparison is unfair if your property is genuinely better "
@@ -224,8 +242,11 @@ def _premium_lines(
         "",
         f"- Raw comparable median: {_fmt_money(raw_peer_median)}",
         f"- Feature-matched comparable median (peers adjusted to your quality): {_fmt_money(adjusted_peer_median)}",
-        f"- Your median asking price: {_fmt_money(subject_median)}",
     ]
+    band_phrase = _band_phrase(adjusted_band)
+    if band_phrase is not None:
+        lines.append(band_phrase)
+    lines.append(f"- Your median asking price: {_fmt_money(subject_median)}")
 
     if feature_premium is not None and residual_premium is not None:
         lines.extend(
@@ -349,6 +370,7 @@ def render_positioning_narrative(payload: dict[str, Any]) -> str:
             feature_premium=feature_premium,
             residual_premium=residual_premium,
             gap_payload=payload.get("gap_explanation"),
+            adjusted_band=payload.get("adjusted_peer_price_band"),
         ),
         "",
         "## Recommendation",
@@ -361,10 +383,13 @@ def render_positioning_narrative(payload: dict[str, Any]) -> str:
         "listed asking prices for available offers, not transacted prices or demand.",
         "- Large-party villa economics are not captured here, because every villa "
         "price was scraped at 2-guest occupancy.",
-        "- The feature adjustment comes from a gradient-boosted hedonic model "
-        f"(grouped cross-validated log R-squared about {_fmt_pct((_num(metrics.get('r2_log_mean')) or 0) * 100)}, "
+        "- The feature adjustment comes from a grouped cross-validated, gradient-boosted "
+        f"hedonic model (log R-squared about {_fmt_pct((_num(metrics.get('r2_log_mean')) or 0) * 100)}, "
         f"typical error about {_fmt_money(metrics.get('mae_eur_mean'))} per night). Treat it as a "
         "directional adjustment, not an exact valuation.",
+        "- The likely range shown against the feature-matched median is a split-conformal "
+        "prediction band: it turns the model's own out-of-sample error into a plausible "
+        "interval, so read the single figure as the middle of that range, not an exact number.",
         f"- Comparable source table: `{payload.get('source_table', 'n/a')}`",
         f"- Hedonic training table: `{payload.get('training_source_table', payload.get('source_table', 'n/a'))}`",
         "",

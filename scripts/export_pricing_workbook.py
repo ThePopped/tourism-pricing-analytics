@@ -22,6 +22,7 @@ if str(REPO_ROOT) not in sys.path:
 from scripts.run_competitors import _default_subject_url, _load_spec
 from scripts.run_hedonic import build_report_payload
 from tourism_pricing_analytics.analysis.competitors import ComparableBenchmarkConfig
+from tourism_pricing_analytics.analysis.hedonic import SELECTED_MIN_TOKEN_FREQUENCY
 from tourism_pricing_analytics.analysis.loader import (
     DEFAULT_HEDONIC_TRAINING_TABLE,
     DEFAULT_MODELLING_TABLE,
@@ -357,10 +358,13 @@ def _summary_rows(payload: dict[str, Any]) -> list[list[object]]:
     peer_distribution = benchmark["peer_price_distribution"]
     subject_distribution = benchmark["subject_price_distribution"]
     adjusted = payload["adjusted_peer_price_distribution"]
+    band = payload.get("adjusted_peer_price_band") or {}
     metrics = payload["cv_metrics"]
     gap = payload["gap_explanation"] or {}
     flags = benchmark["peer_set"]["flags"]
     gap_pct = benchmark["price_gap_to_peer_median_pct"]
+    coverage = payload.get("conformal_coverage", metrics.get("conformal_coverage"))
+    coverage_label = "n/a" if coverage is None else f"{float(coverage) * 100:.0f}% conformal band"
 
     return [
         ["Competitive Pricing Workbook"],
@@ -413,6 +417,17 @@ def _summary_rows(payload: dict[str, Any]) -> list[list[object]]:
         ["Observed gap", gap.get("observed_gap")],
         ["Feature-explained gap", gap.get("feature_explained_gap")],
         ["Residual gap", gap.get("residual_gap")],
+        [],
+        ["Prediction Band"],
+        ["Basis", coverage_label],
+        ["Adjusted peer median", band.get("price")],
+        ["Lower bound", band.get("lower")],
+        ["Upper bound", band.get("upper")],
+        [],
+        ["Selected Model"],
+        ["Family", metrics.get("model_family")],
+        ["Min token frequency", metrics.get("min_token_frequency")],
+        ["Out-of-fold residuals", metrics.get("conformal_residual_count")],
     ]
 
 
@@ -508,7 +523,7 @@ def workbook_sheets(payload: dict[str, Any]) -> list[tuple[str, str]]:
     )
     summary = _sheet_xml(
         _summary_rows(payload),
-        section_rows={5, 11, 23, 29, 39},
+        section_rows={5, 11, 23, 29, 39, 46, 52},
         cell_styles={
             (9, 1): 4,
             (14, 1): 4,
@@ -527,6 +542,9 @@ def workbook_sheets(payload: dict[str, Any]) -> list[tuple[str, str]]:
             (42, 1): 4,
             (43, 1): 4,
             (44, 1): 4,
+            (48, 1): 4,
+            (49, 1): 4,
+            (50, 1): 4,
         },
         numeric_columns={1},
         widths={0: 30, 1: 46},
@@ -635,7 +653,7 @@ def main() -> None:
     parser.add_argument("--season", action="append", default=None)
     parser.add_argument("--max-peers", type=int, default=ComparableBenchmarkConfig.max_peers)
     parser.add_argument("--max-distance-km", type=float, default=ComparableBenchmarkConfig.max_distance_km)
-    parser.add_argument("--min-token-frequency", type=int, default=25)
+    parser.add_argument("--min-token-frequency", type=int, default=SELECTED_MIN_TOKEN_FREQUENCY)
     parser.add_argument("--out", type=Path, default=DEFAULT_WORKBOOK_PATH)
     args = parser.parse_args()
 
@@ -645,6 +663,9 @@ def main() -> None:
     print(f"Client: {payload['benchmark']['client'].get('property_name') or 'n/a'}")
     print(f"Raw peer median: {_fmt_money(payload['benchmark']['peer_price_distribution']['median'])}")
     print(f"Adjusted peer median: {_fmt_money(payload['adjusted_peer_price_distribution']['median'])}")
+    band = payload.get("adjusted_peer_price_band")
+    if band:
+        print(f"Adjusted peer band: {_fmt_money(band['lower'])} to {_fmt_money(band['upper'])}")
     print(
         "Subject percentile vs peers: "
         f"{_fmt_pct(payload['benchmark']['subject_percentile_vs_peers'])}"

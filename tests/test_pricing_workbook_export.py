@@ -17,6 +17,17 @@ def _payload() -> dict[str, object]:
             "r2_log_mean": 0.25,
             "mae_log_mean": 0.15,
             "mae_eur_mean": 40.0,
+            "model_family": "hist_gradient_boosting",
+            "min_token_frequency": 15,
+            "conformal_coverage": 0.8,
+            "conformal_residual_count": 12,
+        },
+        "conformal_coverage": 0.8,
+        "adjusted_peer_price_band": {
+            "price": 140.0,
+            "lower": 105.0,
+            "upper": 186.0,
+            "coverage": 0.8,
         },
         "ols_r2": 0.55,
         "ols_condition_number": 1000.0,
@@ -149,6 +160,11 @@ class PricingWorkbookExportTests(unittest.TestCase):
             self.assertIn("Subject Stay", summary_xml)
             self.assertIn("Feature-Adjusted Benchmark", summary_xml)
             self.assertIn("feature_adjusted_price_per_night", adjusted_xml)
+            # Phase E: the ± conformal band and the chosen model surface on Summary.
+            self.assertIn("Prediction Band", summary_xml)
+            self.assertIn("80% conformal band", summary_xml)
+            self.assertIn("Selected Model", summary_xml)
+            self.assertIn("hist_gradient_boosting", summary_xml)
 
 
 if __name__ == "__main__":

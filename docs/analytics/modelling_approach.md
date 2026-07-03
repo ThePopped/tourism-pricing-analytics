@@ -50,7 +50,7 @@ modelling_table.parquet            committed durable input (one row per rate off
 | Load + validate | [loader.py](../../tourism_pricing_analytics/analysis/loader.py) | clean in-memory frame |
 | Segment | [segment.py](../../tourism_pricing_analytics/analysis/segment.py) | self-catering rows |
 | Comparables | [competitors.py](../../tourism_pricing_analytics/analysis/competitors.py) | peer set, price benchmark, percentile |
-| Hedonic | [hedonic.py](../../tourism_pricing_analytics/analysis/hedonic.py) | OLS premia, GBM, adjusted comps, gap split |
+| Hedonic | [hedonic.py](../../tourism_pricing_analytics/analysis/hedonic.py) | OLS premia, tuned booster, adjusted comps + conformal band, gap split |
 | Narrative | [narrative.py](../../tourism_pricing_analytics/analysis/narrative.py) | plain-language client report |
 
 ## Input contract
@@ -120,11 +120,25 @@ like training rows). Features:
   `checkin_month`, `checkin_is_weekend`.
 - **Ordinals:** `meal_plan_ordinal`, `cancellation_flexibility_ordinal`.
 - **Review subscores:** one `subscore_*` column per key found.
+- **Location distances:** `nearest_beach_km`, `chania_centre_km`, `airport_km`,
+  `urban_centre_km`, `top_attraction_km` (from
+  [features/geo.py](../../tourism_pricing_analytics/features/geo.py)). Each is the
+  minimum of any scraped POI-category distance and a haversine to a curated set of
+  Chania/west-coast anchors, so raw lat/lon become distances the model can use and
+  OLS can read. These flow into **both** the GBM and OLS sets.
+- **Curated high-value binaries:** `hq__*` (pool, sea view, beachfront,
+  balcony/terrace, parking, kitchen, washing machine, private entrance, air
+  conditioning, hot tub, garden) from
+  [features/quality.py](../../tourism_pricing_analytics/features/quality.py),
+  matched against normalized amenity **and** facility tokens **independently of the
+  frequency floor**. Columns that are constant across the segment are dropped
+  (no variance, no signal). These also flow into both models.
 - **Categoricals (one-hot):** `property_type`, `crete_season`.
 - **Multi-hot text:** `amenity__*`, `facility__*`, kept above a frequency floor
-  (`min_token_frequency = 25`) to control dimensionality against ~154
-  properties.
-- **Raw geo:** `latitude`, `longitude` (GBM only -- see below).
+  (`min_token_frequency`, **tuned to 15** in the model bake-off below) to control
+  dimensionality against ~154 properties.
+- **Raw geo:** `latitude`, `longitude` (GBM only -- the interpretable location
+  signal for OLS comes from the distance features above).
 - **Missingness flags:** `<col>_missing` for any numeric with nulls, with median
   imputation of the underlying value. Missingness is itself signal.
 
@@ -135,10 +149,39 @@ are excluded, and a leakage guard raises if any reaches the matrix.
 
 - **Model A -- OLS** (`statsmodels`, HC3 robust SEs) for **interpretable
   market premia**. Uses a reduced feature set: drops raw lat/lon, drops the
-  reference level of each categorical, and drops the amenity/facility multi-hot.
-- **Model B -- gradient boosting** (`sklearn`, seed 10001) using the **full**
-  feature set, evaluated with **GroupKFold by `property_url`** so no property
-  appears in both train and test. Out-of-sample R2/MAE reported in log and EUR.
+  reference level of each categorical, and drops the amenity/facility multi-hot,
+  but keeps the location distances and `hq__` binaries as readable premia.
+- **Model B -- boosted trees, selected by grouped bake-off** (`sklearn`, seed
+  10001) using the **full** feature set. Rather than hand-picked hyperparameters,
+  a deterministic random search (fixed `RandomState(10001)`) tunes both a
+  `GradientBoostingRegressor` and a `HistGradientBoostingRegressor` under the
+  same **GroupKFold by `property_url`**, with `min_token_frequency` swept as an
+  outer dimension (each value rebuilds the design matrix). Every candidate is
+  scored by mean out-of-sample EUR MAE, and the global winner is refit on the
+  full segment and shipped; the losing family stays available. The chosen model
+  is pinned in code (`SELECTED_MODEL_FAMILY` / `SELECTED_MODEL_PARAMS` /
+  `SELECTED_MIN_TOKEN_FREQUENCY`) so every deliverable trains the same tuned
+  model, with its metrics recomputed deterministically at fit time.
+
+  **Selected model:** `HistGradientBoostingRegressor` at
+  `min_token_frequency = 15` (`learning_rate=0.05`, `max_iter=300`,
+  `max_leaf_nodes=15`, `min_samples_leaf=10`, `max_features=0.7`,
+  `l2_regularization=0.0`). Reported family, params, and token floor ride along
+  in `cv_metrics` so each report can name the model it used.
+
+### Prediction uncertainty (conformal headline)
+
+Every price the deliverables quote is a point estimate with real error, so the
+model attaches an **interval**, not just a number. Out-of-fold residuals are
+collected on the log scale over the same grouped folds, and their asymmetric
+signed quantiles give a **grouped split-conformal band** at a configurable
+coverage (default **80%**): `price_band` multiplies a price by
+`exp(q_lo) .. exp(q_hi)` to yield `{price, lower, upper, coverage}`. This band is
+applied to the headline **feature-adjusted peer median** so clients read
+"adjusted peer median EUR X (EUR Y..Z, 80% band)" instead of false precision.
+Optional `HistGradientBoostingRegressor(loss="quantile")` models are stored on
+the bundle for feature-dependent width, but the conformal band stays the
+reported headline because its coverage is calibrated on held-out properties.
 
 ### Two uses
 
@@ -160,19 +203,21 @@ are excluded, and a leakage guard raises if any reaches the matrix.
 | Artifact | Built by | Contents |
 | --- | --- | --- |
 | `data/modelling/competitor_report.md` | `scripts/run_competitors.py` | peer set + benchmark range for a client |
-| `data/modelling/hedonic_report.md` | `scripts/run_hedonic.py` | OLS premia, CV metrics, adjusted benchmark, sample gap split |
+| `data/modelling/hedonic_report.md` | `scripts/run_hedonic.py` | OLS premia, CV metrics, selected model, adjusted benchmark + conformal band, sample gap split |
 | `data/modelling/competitive_pricing_workbook.xlsx` | `scripts/export_pricing_workbook.py` | client-facing multi-sheet export |
 | `data/modelling/positioning_narrative.md` | `scripts/run_positioning_narrative.py` | plain-language narrative for a non-technical operator |
 | local dashboard | `scripts/run_dashboard.py` | interactive stdlib HTTP view over the same helpers |
 
 Reading the metrics:
 
-- **GBM out-of-sample R2 (log) ~ 0.31, MAE ~ EUR 53/night.** Measurable
-  features explain only ~31% of cross-property price variation out of sample; a
-  typical single-listing prediction is off by ~EUR 53. Treat model output as a
-  *well-informed adjustment, not an exact valuation*. The feature-adjusted comps
-  and gap split are more robust than this R2 alone implies, because they use
-  *ratios/differences* anchored on real prices, where common error cancels.
+- **Selected-model out-of-sample R2 (log) ~ 0.26, MAE ~ EUR 55/night.**
+  Measurable features explain only ~a quarter of cross-property price variation out
+  of sample; a typical single-listing prediction is off by ~EUR 55. Treat model
+  output as a *well-informed adjustment, not an exact valuation* -- and read the
+  quoted price as the middle of its conformal band, not an exact figure. The
+  feature-adjusted comps and gap split are more robust than this R2 alone
+  implies, because they use *ratios/differences* anchored on real prices, where
+  common error cancels.
 - **OLS coefficients are log-points** (~ percentage premia): e.g. a `+0.13`
   `star_rating` coefficient ~ a ~13% premium per star. Use them for talking
   points, not point prediction.
