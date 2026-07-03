@@ -20,6 +20,10 @@ from tourism_pricing_analytics.features.geo import (
     GEO_DISTANCE_FEATURES,
     add_location_features,
 )
+from tourism_pricing_analytics.features.quality import (
+    QUALITY_FEATURE_COLUMNS,
+    quality_flags,
+)
 
 RANDOM_SEED = 10001
 
@@ -159,6 +163,7 @@ class HedonicFeatureMeta:
     categorical_levels: dict[str, tuple[str, ...]]
     amenity_vocabulary: tuple[str, ...]
     facility_vocabulary: tuple[str, ...]
+    quality_features: tuple[str, ...]
     imputation_values: dict[str, float]
     target_column: str = "price_per_night"
     group_column: str = "property_url"
@@ -225,6 +230,22 @@ def _tokens_from_value(value: object) -> set[str]:
 
 def _row_token_sets(series: pd.Series) -> list[set[str]]:
     return [_tokens_from_value(value) for value in series.tolist()]
+
+
+def _combined_quality_tokens(prepared: pd.DataFrame) -> list[set[str]]:
+    """Union of normalized amenity + facility tokens per row for curated flags."""
+
+    amenity = (
+        _row_token_sets(prepared["amenities"])
+        if "amenities" in prepared
+        else [set()] * len(prepared)
+    )
+    facility = (
+        _row_token_sets(prepared["property_facilities"])
+        if "property_facilities" in prepared
+        else [set()] * len(prepared)
+    )
+    return [a | f for a, f in zip(amenity, facility)]
 
 
 def _frequency_vocabulary(series: pd.Series, min_frequency: int) -> tuple[str, ...]:
@@ -361,6 +382,18 @@ def _fit_feature_meta(
         else ()
     )
 
+    # Curated high-value binaries, evaluated independently of the frequency
+    # floor. Drop any that are constant across the training segment (e.g. a
+    # near-ubiquitous "air conditioning"): a column with no variance carries no
+    # signal for the trees and is collinear with the OLS intercept.
+    quality_rows = [quality_flags(tokens) for tokens in _combined_quality_tokens(prepared)]
+    n_rows = len(quality_rows)
+    quality_features = tuple(
+        column
+        for column in QUALITY_FEATURE_COLUMNS
+        if 0 < sum(row[column] for row in quality_rows) < n_rows
+    )
+
     feature_columns: list[str] = []
     for column in numeric_features:
         feature_columns.append(column)
@@ -371,6 +404,7 @@ def _fit_feature_meta(
         feature_columns.extend(_safe_feature_name(f"{column}__", level) for level in levels)
     feature_columns.extend(_safe_feature_name("amenity__", token) for token in amenity_vocabulary)
     feature_columns.extend(_safe_feature_name("facility__", token) for token in facility_vocabulary)
+    feature_columns.extend(quality_features)
 
     leakage = set(feature_columns) & IDENTIFIER_OR_LEAKAGE_COLUMNS
     if leakage:
@@ -399,6 +433,7 @@ def _fit_feature_meta(
         categorical_levels=categorical_levels,
         amenity_vocabulary=amenity_vocabulary,
         facility_vocabulary=facility_vocabulary,
+        quality_features=quality_features,
         imputation_values=imputation_values,
     )
 
@@ -434,6 +469,12 @@ def _transform_with_meta(frame: pd.DataFrame, meta: HedonicFeatureMeta) -> pd.Da
     )
     for token in meta.facility_vocabulary:
         feature_data[_safe_feature_name("facility__", token)] = [int(token in tokens) for tokens in facility_tokens]
+
+    if meta.quality_features:
+        combined = [a | f for a, f in zip(amenity_tokens, facility_tokens)]
+        quality_rows = [quality_flags(tokens) for tokens in combined]
+        for column in meta.quality_features:
+            feature_data[column] = [row[column] for row in quality_rows]
 
     features = pd.DataFrame(feature_data, index=prepared.index)
     for column in meta.feature_columns:
