@@ -1,20 +1,27 @@
 # Modelling Table Export
 
 `modelling_table.parquet` is the durable downstream analytics input built from
-the completed Booking.com scrape run:
+completed Booking.com scrape runs:
 
-- Source run: `saved_dom/runs/20260629_180820_565010`
+- Source runs:
+  - `saved_dom/runs/headed8_full_20260703_113337`
+  - `saved_dom/runs/headed8_retry_challenges_20260703_133957`
+  - `saved_dom/runs/stavros_targeted_20260703`
 - Export command:
-  `.\.venv\Scripts\python.exe scripts\export_modelling_table.py --run-dir saved_dom\runs\20260629_180820_565010`
-- Export date: 2026-06-29
-- Shape: 1,653 rows x 53 columns
+  `.\.venv\Scripts\python.exe scripts\export_modelling_table.py --run-dir saved_dom\runs\headed8_full_20260703_113337 --run-dir saved_dom\runs\headed8_retry_challenges_20260703_133957 --run-dir saved_dom\runs\stavros_targeted_20260703`
+- Export date: 2026-07-03
+- Shape: 4,702 rows x 53 columns
+- Properties: 295, including Stavros Villas & Apartments
 - Grain: one row per available Booking.com rate offer
 - Price unit: EUR/night for 2 guests, computed as
   `current_price_value / stay_length_days`
 
-The source run directory is generated local data and remains git-ignored. This
-Parquet file is committed so analysis code has a stable input without requiring
-the full scrape artifacts.
+The export combines runs in the order provided. Later runs replace earlier rows
+for the same `property_url`, so a retry run can cleanly supersede a full run for
+the properties it revisited, and a targeted client run can ensure the dashboard
+has same-window subject data. Source run directories are generated local data and
+remain git-ignored. This Parquet file is committed so analysis code has a stable
+input without requiring the full scrape artifacts.
 
 `hedonic_training_table.parquet` is the broader committed training table used
 for the feature-adjustment model. The local Gerani table above remains the
@@ -102,6 +109,18 @@ Use `--latest` to append the most recent run automatically, or
 idempotent: rows dedupe by snapshot/property/window/occupancy identity (plus
 `room_id`/`block_id` for observations), so re-running a run is safe.
 
+### Dashboard table rebuild command
+
+Build the current combined dashboard table from the July 3 full run, recovery
+retry, and targeted Stavros scrape:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\export_modelling_table.py `
+  --run-dir saved_dom\runs\headed8_full_20260703_113337 `
+  --run-dir saved_dom\runs\headed8_retry_challenges_20260703_133957 `
+  --run-dir saved_dom\runs\stavros_targeted_20260703
+```
+
 ### Validation (2026-07-01)
 
 Appending the local runs surfaced a data-quality gate in
@@ -135,3 +154,22 @@ EUR 206.75/night, down 12.0%** from EUR 235.00, recommended action
 **Increase test** (medium confidence) with reason codes `market_firming`,
 `property_specific_discount`, `lead_time_compression`, `possible_price_headroom`,
 and `external_covariates_missing`. The payload is JSON-safe (`allow_nan=False`).
+
+### Validation (2026-07-03)
+
+The headed 8-worker full Chania scrape completed, then a headed 4-worker retry
+revisited challenged/aborted properties. A one-property headed Stavros scrape was
+run afterward because the generated Chania candidate config had previously
+dropped baseline/client targets. The config generator now preserves baseline
+targets first.
+
+Current local generated history stores after appending the fresh Stavros run:
+
+- `price_observations.parquet`: 8,723 rows x 22 columns.
+- `offer_presence.parquet`: 9,576 rows x 19 columns.
+
+For Stavros, the Price Movements tab has enough snapshots overall, but movement
+signals are only meaningful where the selected window has current and previous
+subject/peer prices. On 2026-07-03 the `60/4` and `60/7` windows have usable
+movement signals; `7/4`, `7/7`, `30/4`, and `30/7` are limited by scrape misses,
+newly available state, unavailable state, or missing previous peer medians.

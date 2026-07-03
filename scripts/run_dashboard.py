@@ -34,12 +34,16 @@ if str(REPO_ROOT) not in sys.path:
 from scripts.run_hedonic import build_report_payload
 from tourism_pricing_analytics.analysis.competitors import ComparableBenchmarkConfig
 from tourism_pricing_analytics.analysis.dashboard import (
+    default_subject_url,
     render_index_html,
     shape_dashboard_payload,
     subject_catalog,
     window_options,
 )
-from tourism_pricing_analytics.analysis.hedonic import fit_hedonic_models
+from tourism_pricing_analytics.analysis.hedonic import (
+    SELECTED_MIN_TOKEN_FREQUENCY,
+    fit_selected_hedonic_models,
+)
 from tourism_pricing_analytics.analysis.loader import (
     DEFAULT_HEDONIC_TRAINING_TABLE,
     DEFAULT_MODELLING_TABLE,
@@ -134,6 +138,85 @@ def _movement_timeline(movement: pd.DataFrame) -> list[dict[str, Any]]:
     return records
 
 
+def _movement_series(movement: pd.DataFrame) -> dict[str, Any]:
+    """Build per-property price series over all snapshots for the trend chart.
+
+    Each property is collapsed to one median ``current_price_per_night`` per
+    snapshot (property-weighted across the selected windows), aligned to a
+    common sorted list of snapshot dates. Returns the subject series, one series
+    per competitor, and a property-weighted mean-of-competitors line.
+    """
+
+    empty = {"snapshot_dates": [], "subject": None, "peers": [], "mean_prices": []}
+    if movement.empty or "snapshot_date" not in movement.columns:
+        return empty
+
+    frame = movement.copy()
+    frame["snapshot_date"] = pd.to_datetime(frame["snapshot_date"], errors="coerce")
+    frame["current_price_per_night"] = pd.to_numeric(
+        frame.get("current_price_per_night"), errors="coerce"
+    )
+    frame = frame.loc[frame["snapshot_date"].notna()]
+    if frame.empty:
+        return empty
+
+    snapshot_dates = sorted(frame["snapshot_date"].dt.normalize().unique())
+    date_labels = [pd.Timestamp(value).date().isoformat() for value in snapshot_dates]
+    date_index = {label: position for position, label in enumerate(date_labels)}
+
+    is_subject = frame.get("is_subject")
+    subject_mask = is_subject.astype(bool) if is_subject is not None else pd.Series(False, index=frame.index)
+
+    def _series_for(rows: pd.DataFrame) -> list[float | None]:
+        prices: list[float | None] = [None] * len(date_labels)
+        rows = rows.copy()
+        rows["snapshot_label"] = rows["snapshot_date"].dt.normalize().apply(
+            lambda value: pd.Timestamp(value).date().isoformat()
+        )
+        medians = rows.groupby("snapshot_label")["current_price_per_night"].median()
+        for label, value in medians.items():
+            position = date_index.get(label)
+            if position is not None:
+                prices[position] = _json_safe(value)
+        return prices
+
+    subject_block: dict[str, Any] | None = None
+    subject_rows = frame.loc[subject_mask]
+    if not subject_rows.empty:
+        subject_block = {
+            "property_name": _json_safe(subject_rows["property_name"].dropna().iloc[0])
+            if subject_rows["property_name"].notna().any()
+            else None,
+            "property_url": _json_safe(subject_rows["property_url"].iloc[0]),
+            "prices": _series_for(subject_rows),
+        }
+
+    peers: list[dict[str, Any]] = []
+    peer_rows = frame.loc[~subject_mask]
+    for property_url, rows in peer_rows.groupby("property_url", dropna=False):
+        names = rows["property_name"].dropna()
+        peers.append(
+            {
+                "property_name": _json_safe(names.iloc[0]) if not names.empty else None,
+                "property_url": _json_safe(property_url),
+                "prices": _series_for(rows),
+            }
+        )
+
+    # Property-weighted mean line: average each snapshot across the peer medians.
+    mean_prices: list[float | None] = []
+    for position in range(len(date_labels)):
+        column = [peer["prices"][position] for peer in peers if peer["prices"][position] is not None]
+        mean_prices.append(round(sum(column) / len(column), 4) if column else None)
+
+    return {
+        "snapshot_dates": date_labels,
+        "subject": subject_block,
+        "peers": peers,
+        "mean_prices": mean_prices,
+    }
+
+
 def _default_low_history_action(message: str) -> dict[str, Any]:
     return {
         "recommended_action": ACTION_NO_SIGNAL,
@@ -154,7 +237,7 @@ class DashboardService:
         source_table: str,
         training_frame: pd.DataFrame | None = None,
         training_source_table: str | None = None,
-        min_token_frequency: int = 25,
+        min_token_frequency: int = SELECTED_MIN_TOKEN_FREQUENCY,
         observations: pd.DataFrame | None = None,
         presence: pd.DataFrame | None = None,
         covariates: pd.DataFrame | None = None,
@@ -165,13 +248,16 @@ class DashboardService:
         self.observations = observations if observations is not None else load_price_observations()
         self.presence = presence if presence is not None else load_offer_presence()
         self.covariates = covariates if covariates is not None else load_demand_covariates()
-        self.bundle = fit_hedonic_models(
+        self.bundle = fit_selected_hedonic_models(
             training_frame if training_frame is not None else frame,
             min_token_frequency=min_token_frequency,
         )
         self.catalog = subject_catalog(frame)
         self.windows = window_options(frame)
-        self._default_subject_url = self.catalog[0]["property_url"] if self.catalog else None
+        self._default_subject_url = default_subject_url(self.catalog)
+        self._subject_names = {
+            record["property_url"]: record["property_name"] for record in self.catalog
+        }
 
     def meta(self) -> dict[str, Any]:
         return {
@@ -287,6 +373,7 @@ class DashboardService:
         return {
             "query": {
                 "subject_url": client,
+                "subject_name": self._subject_names.get(client),
                 "lead_time_days": lead_time_days,
                 "stay_length_days": stay_length_days,
                 "season": season,
@@ -304,6 +391,7 @@ class DashboardService:
             "subject_movement": subject_movement,
             "peer_movements": [_movement_record(row) for _, row in latest_peer_rows.iterrows()],
             "timeline": _movement_timeline(movement),
+            "peer_timeseries": _movement_series(movement),
             "reason_codes": action_payload["reason_codes"],
             "action_payload": action_payload,
             "confidence_flags": action_payload["confidence_flags"],
@@ -401,7 +489,7 @@ def main() -> None:
     )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
-    parser.add_argument("--min-token-frequency", type=int, default=25)
+    parser.add_argument("--min-token-frequency", type=int, default=SELECTED_MIN_TOKEN_FREQUENCY)
     parser.add_argument("--observations-path", type=Path, default=DEFAULT_PRICE_OBSERVATIONS_PATH)
     parser.add_argument("--presence-path", type=Path, default=DEFAULT_OFFER_PRESENCE_PATH)
     parser.add_argument("--covariates-path", type=Path, default=DEFAULT_DEMAND_COVARIATES_PATH)

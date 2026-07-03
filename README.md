@@ -32,8 +32,12 @@ the competitor price-movement layer gains history.
 Completed so far:
 
 - Booking.com scraper configuration lives in `config/booking_scraper_config.json`
-  and targets ~116 Chania properties across five lead times and three stay
+  and targets 377 Chania/Gerani properties across five lead times and three stay
   lengths.
+- The scale-up config `config/booking_scraper_config_chania_full.json` preserves
+  those baseline/client targets first, including **Stavros Villas & Apartments**,
+  then appends discovered Chania candidates for 788 unique targets on the reduced
+  7/30/60 x 4/7 matrix.
 - Reusable scraper logic lives in `tourism_pricing_analytics/scraping/booking/`;
   `notebooks/property_page_scraper.py` remains a thin manual entrypoint.
 - Structured run-output validation writes a `validation_report.json` per run, and
@@ -164,9 +168,14 @@ Current configured defaults:
   rates; whole-villa / large-party pricing is under-served pending a future
   varied-occupancy re-scrape)
 - Browser: Playwright Chromium, currently configured as non-headless
-- Configured properties: ~116 Chania/Crete targets (Chania town, Gerani,
-  Platanias, Agia Marina, Maleme), including the client subject **Stavros Villas
-  & Apartments**
+- Configured properties: 377 Chania/Gerani/Crete targets (Chania town, Gerani,
+  Platanias, Agia Marina, Maleme, and neighbouring west-coast areas), including
+  the client subject **Stavros Villas & Apartments**
+
+The scale-up config `config/booking_scraper_config_chania_full.json` is generated
+from this baseline plus `data/sample/listings_chania_candidates.csv`; baseline
+targets are preserved first and candidate URLs are appended after canonical
+deduplication.
 
 Keep scraper behavior configurable here rather than hard-coding property lists, dates, browser settings, or occupancy defaults in parser code.
 
@@ -285,6 +294,17 @@ python scripts\run_dashboard.py
 
 See [data/modelling/README.md](data/modelling/README.md) for the rebuild command
 and real-run validation notes.
+
+For dashboard refreshes after a full scrape plus retry pass, build the durable
+table from all relevant runs in order, with later retry/client runs replacing
+earlier rows for the same property:
+
+```powershell
+python scripts\export_modelling_table.py `
+  --run-dir saved_dom\runs\<full_run> `
+  --run-dir saved_dom\runs\<retry_run> `
+  --run-dir saved_dom\runs\<client_targeted_run>
+```
 
 ## Setup
 
@@ -412,7 +432,8 @@ Before scraped data feeds downstream analytics, validate:
 - failure records have populated categories
 - snapshot filenames referenced by failure records exist when a snapshot was expected
 
-The next planned implementation step is to make these checks executable as structured run-output validation helpers.
+These checks are executable in `tourism_pricing_analytics/scraping/booking/validation.py`
+and are reported per run in `validation_report.json`.
 
 ## Documentation
 

@@ -15,6 +15,8 @@ from tourism_pricing_analytics.analysis.movement import (
     PRICE_OBSERVATION_COLUMNS,
 )
 from tourism_pricing_analytics.analysis.dashboard import (
+    DEFAULT_SUBJECT_URL,
+    default_subject_url,
     render_index_html,
     shape_dashboard_payload,
     subject_catalog,
@@ -70,6 +72,7 @@ class ShapePayloadTests(unittest.TestCase):
             "kpis",
             "peer_price_distribution",
             "adjusted_peer_price_distribution",
+            "adjusted_peer_price_band",
             "peers",
             "ols_premia",
             "model",
@@ -78,6 +81,13 @@ class ShapePayloadTests(unittest.TestCase):
         self.assertEqual(payload["client"]["property_name"], "Subject Stay")
         self.assertLessEqual(len(payload["ols_premia"]), 10)
         self.assertIn("subject_percentile_vs_peers", payload["kpis"])
+        # Phase E: the selected-model identity and conformal band ride along.
+        self.assertEqual(payload["model"]["model_family"], "hist_gradient_boosting")
+        self.assertIn("conformal_coverage", payload["model"])
+        band = payload["adjusted_peer_price_band"]
+        if band is not None:
+            self.assertLessEqual(band["lower"], band["price"])
+            self.assertLessEqual(band["price"], band["upper"])
         # Must round-trip through JSON without custom encoders.
         self.assertEqual(json.loads(json.dumps(payload))["client"]["property_url"], "subject")
 
@@ -106,6 +116,37 @@ class RenderIndexTests(unittest.TestCase):
             'id="mv-history"',
         ]:
             self.assertIn(mount, html)
+
+    def test_index_html_has_subject_box_and_trend_chart_mounts(self) -> None:
+        html = render_index_html()
+        # The "benchmark run for" subject boxes on both tabs.
+        self.assertIn('id="bench-subject"', html)
+        self.assertIn('id="mv-subject"', html)
+        self.assertIn("Benchmark run for", html)
+        # The competitor trend chart mount and its renderer.
+        self.assertIn('id="mv-chart"', html)
+        self.assertIn("function lineChart", html)
+        # The default subject is preselected in the dropdown.
+        self.assertIn("meta.default_subject_url", html)
+
+
+class DefaultSubjectTests(unittest.TestCase):
+    def test_default_prefers_client_url_when_present(self) -> None:
+        catalog = [
+            {"property_url": "other", "property_name": "Other"},
+            {"property_url": DEFAULT_SUBJECT_URL, "property_name": "Stavros"},
+        ]
+        self.assertEqual(default_subject_url(catalog), DEFAULT_SUBJECT_URL)
+
+    def test_default_falls_back_to_first_entry(self) -> None:
+        catalog = [
+            {"property_url": "first", "property_name": "First"},
+            {"property_url": "second", "property_name": "Second"},
+        ]
+        self.assertEqual(default_subject_url(catalog), "first")
+
+    def test_default_is_none_for_empty_catalog(self) -> None:
+        self.assertIsNone(default_subject_url([]))
 
 
 class DashboardServiceTests(unittest.TestCase):
@@ -178,6 +219,17 @@ class DashboardServiceTests(unittest.TestCase):
             [entry["snapshot_date"] for entry in payload["timeline"]],
             ["2026-06-29", "2026-06-30"],
         )
+        # The trend-chart series carries the subject line, per-competitor lines,
+        # and a property-weighted mean aligned to both snapshot dates.
+        series = payload["peer_timeseries"]
+        self.assertEqual(series["snapshot_dates"], ["2026-06-29", "2026-06-30"])
+        self.assertEqual(series["subject"]["property_url"], "subject")
+        self.assertEqual(series["subject"]["prices"], [100.0, 105.0])
+        self.assertTrue(series["peers"])
+        self.assertTrue(all(url != "subject" for url in (p["property_url"] for p in series["peers"])))
+        self.assertEqual(len(series["mean_prices"]), 2)
+        self.assertTrue(all(value is not None for value in series["mean_prices"]))
+        self.assertEqual(payload["query"]["subject_name"], "Subject Stay")
         json.dumps(payload, allow_nan=False)
 
     def test_movements_endpoint_returns_json_payload(self) -> None:

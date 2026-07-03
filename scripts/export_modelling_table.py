@@ -76,13 +76,55 @@ def export_modelling_table(run_dir: Path, out_path: Path) -> tuple[pd.DataFrame,
     return frame, encoded_columns
 
 
+def combine_modelling_tables(run_dirs: list[Path]) -> pd.DataFrame:
+    """Build one modelling table from multiple runs, preferring later runs.
+
+    Later runs replace earlier rows at the property level. This is intended for
+    the common full-run + retry-run workflow: the full run supplies the broad
+    market, while a retry run supplies cleaner rows for properties it revisited.
+    """
+
+    combined = pd.DataFrame()
+    for run_dir in run_dirs:
+        rows = build_features_from_run(run_dir)
+        frame = pd.DataFrame(rows)
+        if frame.empty:
+            continue
+        if "property_url" not in frame.columns:
+            raise ValueError(f"Run {run_dir} produced rows without property_url")
+        replaced_urls = set(frame["property_url"].dropna().astype(str))
+        if not combined.empty:
+            existing_urls = combined["property_url"].astype(str)
+            combined = combined.loc[~existing_urls.isin(replaced_urls)].copy()
+        combined = pd.concat([combined, frame], ignore_index=True, sort=False)
+    return combined
+
+
+def export_combined_modelling_table(
+    run_dirs: list[Path],
+    out_path: Path,
+) -> tuple[pd.DataFrame, list[str]]:
+    """Build a later-run-preferred modelling table and write it to Parquet."""
+
+    frame = combine_modelling_tables(run_dirs)
+    encoded_frame, encoded_columns = encode_nested_columns(frame)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    encoded_frame.to_parquet(out_path, engine="pyarrow", index=False)
+    return frame, encoded_columns
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--run-dir",
         type=Path,
+        action="append",
         default=None,
-        help="Run directory to export (defaults to the latest under saved_dom/runs/).",
+        help=(
+            "Run directory to export. Repeat to combine runs; later values "
+            "replace earlier rows for the same property. Defaults to latest "
+            "under saved_dom/runs/."
+        ),
     )
     parser.add_argument(
         "--out",
@@ -92,9 +134,12 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    run_dir = args.run_dir or find_latest_run_dir(DEFAULT_RUNS_ROOT)
-    frame, encoded = export_modelling_table(run_dir, args.out)
-    print(f"Source run dir : {run_dir}")
+    run_dirs = args.run_dir or [find_latest_run_dir(DEFAULT_RUNS_ROOT)]
+    if len(run_dirs) == 1:
+        frame, encoded = export_modelling_table(run_dirs[0], args.out)
+    else:
+        frame, encoded = export_combined_modelling_table(run_dirs, args.out)
+    print(f"Source run dir : {', '.join(str(run_dir) for run_dir in run_dirs)}")
     print(f"Wrote          : {args.out}")
     print(f"Rows x cols    : {frame.shape[0]} x {frame.shape[1]}")
     print(f"JSON-encoded   : {', '.join(encoded) or '(none)'}")

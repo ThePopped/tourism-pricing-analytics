@@ -5,7 +5,10 @@ from pathlib import Path
 
 import pandas as pd
 
-from scripts.export_modelling_table import export_modelling_table
+from scripts.export_modelling_table import (
+    export_combined_modelling_table,
+    export_modelling_table,
+)
 
 
 def write_jsonl(path: Path, rows: list[dict]) -> None:
@@ -16,6 +19,17 @@ def write_jsonl(path: Path, rows: list[dict]) -> None:
 
 
 class ExportModellingTableTests(unittest.TestCase):
+    def _write_minimal_run(
+        self,
+        run_dir: Path,
+        rows: list[dict],
+    ) -> None:
+        run_dir.mkdir()
+        write_jsonl(run_dir / "price_rows.jsonl", rows)
+        write_jsonl(run_dir / "room_features.jsonl", [])
+        write_jsonl(run_dir / "property_features.jsonl", [])
+        write_jsonl(run_dir / "room_inventory.jsonl", [])
+
     def test_export_round_trips_nested_columns_through_parquet(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -118,6 +132,77 @@ class ExportModellingTableTests(unittest.TestCase):
             self.assertEqual(
                 json.loads(round_tripped.loc[0, "nearby_poi"]),
                 [{"distance_km": 0.4, "name": "Old Harbour"}],
+            )
+
+    def test_combined_export_prefers_later_run_for_same_property(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            base = tmp_path / "base"
+            retry = tmp_path / "retry"
+            self._write_minimal_run(
+                base,
+                [
+                    {
+                        "property_name": "Subject",
+                        "property_url": "https://example.test/subject",
+                        "checkin": "2026-07-15",
+                        "checkout": "2026-07-19",
+                        "lead_time_days": 7,
+                        "stay_length_days": 4,
+                        "room_id": "101",
+                        "room_name": "Base Room",
+                        "conditions_text": "",
+                        "current_price_value": 400.0,
+                        "price_per_night": 100.0,
+                    },
+                    {
+                        "property_name": "Other",
+                        "property_url": "https://example.test/other",
+                        "checkin": "2026-07-15",
+                        "checkout": "2026-07-19",
+                        "lead_time_days": 7,
+                        "stay_length_days": 4,
+                        "room_id": "201",
+                        "room_name": "Other Room",
+                        "conditions_text": "",
+                        "current_price_value": 800.0,
+                        "price_per_night": 200.0,
+                    },
+                ],
+            )
+            self._write_minimal_run(
+                retry,
+                [
+                    {
+                        "property_name": "Subject",
+                        "property_url": "https://example.test/subject",
+                        "checkin": "2026-07-15",
+                        "checkout": "2026-07-19",
+                        "lead_time_days": 7,
+                        "stay_length_days": 4,
+                        "room_id": "101",
+                        "room_name": "Retry Room",
+                        "conditions_text": "",
+                        "current_price_value": 360.0,
+                        "price_per_night": 90.0,
+                    }
+                ],
+            )
+
+            out_path = tmp_path / "combined.parquet"
+            frame, _ = export_combined_modelling_table([base, retry], out_path)
+            round_tripped = pd.read_parquet(out_path)
+
+            self.assertEqual(frame.shape[0], 2)
+            self.assertEqual(round_tripped.shape[0], 2)
+            by_url = round_tripped.set_index("property_url")
+            self.assertEqual(
+                by_url.loc["https://example.test/subject", "price_per_night"],
+                90.0,
+            )
+            self.assertEqual(
+                by_url.loc["https://example.test/other", "price_per_night"],
+                200.0,
             )
 
 

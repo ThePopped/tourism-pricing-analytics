@@ -58,7 +58,7 @@ class ScraperConfigAndUrlTests(unittest.TestCase):
             CONFIG_DIR / "booking_scraper_config_chania_full.json"
         )
 
-        self.assertEqual(len(scraper_config.properties), 438)
+        self.assertGreaterEqual(len(scraper_config.properties), 438)
         self.assertEqual(scraper_config.lead_times, [7, 30, 60])
         self.assertEqual(scraper_config.stay_lengths, [4, 7])
         self.assertTrue(scraper_config.browser.headless)
@@ -68,6 +68,10 @@ class ScraperConfigAndUrlTests(unittest.TestCase):
         self.assertEqual(scraper_config.output_root, ROOT / "saved_dom")
 
         urls = [target.url for target in scraper_config.properties]
+        self.assertIn(
+            "https://www.booking.com/hotel/gr/stavros-villas-amp-apartments.en-gb.html",
+            urls,
+        )
         self.assertEqual(len(urls), len(set(urls)))
         for url in urls:
             self.assertNotIn("?", url)

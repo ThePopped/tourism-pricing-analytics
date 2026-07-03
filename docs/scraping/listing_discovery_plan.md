@@ -1,31 +1,36 @@
-# Listing Discovery Plan — Gerani Comparable Expansion
+# Listing Discovery Plan - Gerani Comparable Expansion
+
+Status: done (implemented 2026-06-28; later expanded into the 377-property
+Gerani/Chania operating config)
+
+The discovery implementation is complete: the browser-backed discovery module,
+candidate CSV CLI, merge-into-config script, pure unit tests, and downstream
+config expansion have all landed. This document is retained as design context
+and as a reminder of the Gerani location correction that motivated the work.
 
 ## Goal
 
-The downstream report/hedonic subject is **"Stavros Villas & Apartments"**
+The downstream report/hedonic subject is **Stavros Villas & Apartments**
 (`https://www.booking.com/hotel/gr/stavros-villas-amp-apartments.en-gb.html`),
-added as the first entry in `config/booking_scraper_config.json`. **"Stavros" is
-the property's name, not its location** — it actually sits in **Gerani, Chania**
-(west-coast strip, ~13 km west of Chania town; approx lat 35.520, lon 23.870),
-the opposite direction from Stavros/Akrotiri.
+which sits in **Gerani, Chania** (west-coast strip, about 13 km west of Chania
+town; approx lat 35.520, lon 23.870). The name "Stavros" is not its location.
 
-The local self-catering supply around Gerani is under-represented in the current
-scrape. We are building an **automated listing-discovery module** that collects
-~50–100 *similar* self-catering listing URLs around Gerani and **adds** them
-(does not replace) to the live scraper's target list, so a re-scrape enriches the
-local peer set and the hedonic training population.
+The local self-catering supply around Gerani was under-represented in the first
+scrape. The goal of this plan was to collect similar self-catering listing URLs
+around Gerani and add them to the live scraper target list, so a re-scrape could
+enrich both the local peer set and the hedonic training population.
 
-Locked scope decisions (with the user):
-- Area: **Gerani + immediate neighbours** (west-coast strip).
-- Count: **up to 100** new candidate properties.
-- Mode: **add**, not replace. Existing ~154 self-catering / 438 total properties
-  stay as training data; the comparables engine distance-filters per subject, so
-  non-local properties never pollute the Gerani peer set.
+Locked scope decisions:
 
-## Comparables gap (why this is needed)
+- Area: Gerani plus immediate west-coast neighbours.
+- Count: up to 100 new candidate properties per discovery run.
+- Mode: add, not replace. Existing Chania/Crete properties remain useful
+  training data; the comparables engine distance-filters per subject.
 
-Against the corrected Gerani coordinates (35.520, 23.870), the existing committed
-modelling table has only:
+## Comparables Gap
+
+Against the corrected Gerani coordinates, the earlier committed modelling table
+had only:
 
 | Radius from Gerani | Scraped self-catering peers |
 | ---: | ---: |
@@ -34,128 +39,108 @@ modelling table has only:
 | 8 km | 16 |
 | 12 km | 28 |
 
-Yet Booking lists ~48 self-catering properties **in Gerani alone** (Apartments
-28, Villas 12, Holiday homes 8), and the adjacent strip adds many more. So the
-west-coast strip is materially under-scraped relative to available supply.
+Booking listed about 48 self-catering properties in Gerani alone, with more in
+the adjacent strip, so the west-coast peer market needed expansion.
 
-(Note: the *first* data-quality pass in this work used the wrong location —
-Stavros/Akrotiri, ~35.59/24.13 — and reported only 5 peers within 8 km. That was
-based on the property name, not its real Gerani location. Disregard it.)
+The first data-quality pass accidentally used Stavros/Akrotiri coordinates
+because it inferred location from the property name. Disregard that pass; the
+client subject is in Gerani.
 
-## Live research findings (Booking.com, captured 2026-06-28)
+## Live Research Findings
 
-- **Card selectors still valid.** Today's DOM still uses
+Captured on Booking.com on 2026-06-28:
+
+- Search-card selectors were still usable:
   `[data-testid="property-card"]`, `a[data-testid="title-link"]`,
-  `[data-testid="title"]`, `[data-testid="price-and-discounted-price"]`. The
-  existing pure parser `listings.parse_listings` works unchanged.
-- **Self-catering type filter:** `nflt=ht_id=201;ht_id=213;ht_id=220` →
-  Apartments (201), Villas (213), Holiday homes (220). Aparthotels self-classify
-  under Apartments. (Other codes seen: 204 Hotels, 216 Guest houses, 206 Resorts,
-  208 B&B, 203 Hostels, 222 Homestays, 223 Country houses.)
-- **Pagination is offset-based:** `&offset=25,50,…` returns fresh pages of 25
-  cards. No infinite-scroll dependency required. No reliable "load more" button.
-- **Text-destination resolution is flaky.** An "Akrotiri" search resolved to a
-  same-named hotel and showed fallback results ("No properties found" + nearby).
-  A curated village list (or a map bounding box) is more reliable than free text.
-- **Subject confirmed in Gerani:** a `ss=Gerani, Chania, Crete, Greece` search
-  returns the subject property and ~53 properties (~48 self-catering).
-- Dateless discovery is intentional: we only need stable URLs; adding
-  checkin/checkout would gate on availability and drop relevant listings.
-  Occupancy mirrors the controlled 2-guest scrape via `default_search`.
+  `[data-testid="title"]`, and `[data-testid="price-and-discounted-price"]`.
+- Self-catering type filter:
+  `nflt=ht_id=201;ht_id=213;ht_id=220` for apartments, villas, and holiday
+  homes. Aparthotels self-classified under apartments.
+- Pagination is offset-based (`offset=25`, `50`, etc.), so no infinite-scroll
+  dependency is needed for discovery.
+- Free-text destination resolution can be flaky; curated village names are more
+  reliable than ambiguous destination text.
+- Dateless discovery is intentional: the scraper only needs stable property
+  URLs. Adding check-in/check-out dates would filter out relevant unavailable
+  listings.
 
 ## Architecture
 
-The pre-existing discovery flow had a **manual gap**: someone hand-saved
-`listings_chania.html`, then `parse_listings` → `extract_listing_candidates.py`
-(→ CSV) → `generate_full_config.py` (→ config). The new module automates the
-navigation that produces those candidates.
+The old flow had a manual gap: save search-result HTML, parse it, extract CSV
+candidates, then generate a config. The implemented discovery flow automates
+the navigation while keeping parsing and merge decisions pure and testable.
 
-Design principle (matches the repo): keep parsing pure; every decision is a pure,
-unit-testable function; only a thin browser layer touches Playwright.
+Implemented components:
 
-## Status
+- `tourism_pricing_analytics/scraping/booking/discovery.py`
+  - `DiscoveryConfig`
+  - `DEFAULT_SEARCH_AREAS`
+  - `SELF_CATERING_HT_IDS = (201, 213, 220)`
+  - Pure helpers: `build_search_url`, `detect_blocked_page`,
+    `should_stop_pagination`, `merge_candidates`
+  - Browser helpers: `collect_area_candidates`, `discover_candidates`
+- `scripts/discover_listings.py`
+  - Runs live discovery and writes candidate CSV rows in the same schema as
+    `extract_listing_candidates.py`.
+- `scripts/merge_candidates_into_config.py`
+  - Preserves the baseline config's search matrix, browser settings, retry
+    policy, and existing properties.
+  - Appends only canonicalized, deduplicated candidate URLs via
+    `merge_candidate_rows`.
+- `tests/test_discovery.py`
+  - Covers URL construction, pagination stopping, blocked-page detection,
+    candidate merging, merge-into-config behavior, and config-setting
+    preservation.
 
-### DONE
+## Completion Notes
 
-- [x] Added subject to `config/booking_scraper_config.json` (first entry).
-- [x] **`tourism_pricing_analytics/scraping/booking/discovery.py`** (new module),
-      compiles. Contents:
-  - `DiscoveryConfig` dataclass: `areas`, `ht_ids`, `max_per_area` (75),
-    `max_total` (100), `max_pages_per_area` (8), `page_size` (25), with validation.
-  - `DEFAULT_SEARCH_AREAS`: Gerani, Platanias, Maleme, Agia Marina, Kontomari,
-    Tavronitis, Kolymbari (all "…, Chania, Crete, Greece").
-  - `SELF_CATERING_HT_IDS = (201, 213, 220)`.
-  - Pure: `build_search_url(...)`, `detect_blocked_page(...)`,
-    `should_stop_pagination(...)`, `merge_candidates(...)`.
-  - Thin browser layer: `collect_area_candidates(page, …)` (offset pagination +
-    `parse_listings` + blocked-page guard), `discover_candidates(context, …)`
-    (loops areas, merges, dedups, excludes config URLs, caps at `max_total`).
-- [x] **`scripts/discover_listings.py`** (new CLI), compiles. Launches Chromium
-      from the browser config, runs `discover_candidates`, writes a candidate CSV
-      in the **same schema as `extract_listing_candidates.py`**
-      (`name,url,price_text,review_score_text,recommended_unit_text`) so it feeds
-      straight into the config pipeline. Flags: `--config`, `--area` (repeatable),
-      `--max-per-area`, `--max-total`, `--max-pages-per-area`, `--include-existing`,
-      `--out` (default `data/sample/listings_gerani_candidates.csv`). Excludes
-      already-configured URLs (incl. the subject) by default.
-- [x] Memory written: `client-subject-property.md` (Gerani location fact).
+- The subject property was added to `config/booking_scraper_config.json`.
+- The discovery module, CLI, merge script, and tests were implemented and
+  committed after the relevant compile/test sweep.
+- Later work ran the expansion path and produced the current
+  `config/booking_scraper_config.json` operating config with 377 targets.
+- The full Chania scale-up config remains separately committed as
+  `config/booking_scraper_config_chania_full.json`; it preserves all baseline
+  targets first, including Stavros Villas & Apartments, then appends canonical
+  Chania candidate URLs. The 2026-07-03 generated config has 788 unique targets.
 
-### TODO (pick up here)
+When changing the target set again:
 
-1. **Merge script — `scripts/merge_candidates_into_config.py`** (NOT yet created).
-   A dedicated script (intentionally *not* `generate_full_config.py`, which forces
-   the reduced scale-up matrix + headless and would corrupt the full-matrix
-   baseline). Core is a pure, testable function, sketch:
-   ```python
-   def merge_candidate_rows(existing_targets, candidate_rows):
-       """existing {name,url} kept verbatim first; append new canonicalized,
-       deduped candidate rows. Returns (merged_targets, added_count)."""
-   ```
-   Uses `canonicalize_property_url`. CLI: `--config` (baseline to extend),
-   `--candidates` (CSV), `--out` (default in-place). Writes JSON with
-   `indent=2, ensure_ascii=False`.
-2. **Tests — `tests/test_discovery.py`** (NOT yet created), pure logic, seed 10001:
-   - `build_search_url`: `ss`, `nflt == "ht_id=201;ht_id=213;ht_id=220"` (decode
-     with `parse_qs`), `group_adults=2`, `offset` present only when `>0`.
-   - `should_stop_pagination`: max-pages hit, short final page, zero-new-candidates,
-     and the keep-going case.
-   - `detect_blocked_page`: positive markers + negative (normal results).
-   - `merge_candidates`: dedup by canonical URL, `exclude_urls`, `max_total` cap,
-     order preserved.
-   - `merge_candidate_rows` (from the merge script): existing kept first, new
-     appended, dupes/excludes dropped, count correct.
-   - Optional: trim a real Gerani search-results page into
-     `data/sample/raw_html/` as a fixture and assert `parse_listings` count.
-3. **Full test sweep** per CLAUDE.md before committing this phase:
-   `python -m compileall tourism_pricing_analytics scripts` and
-   `python -m unittest discover -s tests` (was 228 tests OK).
-4. **Commit** the discovery phase (module + script + merge script + tests +
-   this plan + config subject entry).
-5. **Run discovery live** (heavy, outward-facing — get user go-ahead):
-   `python scripts/discover_listings.py --max-total 100`
-   → review the CSV → `python scripts/merge_candidates_into_config.py` →
-   re-scrape the combined target set → rebuild
-   `data/modelling/modelling_table.parquet`.
+```powershell
+python scripts\discover_listings.py --max-total 100
+python scripts\merge_candidates_into_config.py --candidates data\sample\listings_gerani_candidates.csv
+```
 
-## Important caveat for the re-scrape
+Then re-scrape the combined target set and rebuild
+`data/modelling/modelling_table.parquet` so peer windows stay on one consistent
+scrape vintage.
 
-The committed modelling table is a single vintage (run `20260623_222416_346202`,
-check-ins 2026-06-30 … 2026-08-22). The comparables benchmark matches peers to
-the subject on `(checkin, lead_time_days, stay_length_days)` windows, so for the
-new properties to be comparable on the *same* windows, the cleanest path is a
-**single combined re-scrape of the full target set** (consistent base date and
-lead/stay matrix), not a separate new-vintage scrape stitched onto the old one.
-The hedonic model uses lead/stay/season covariates (not absolute dates), so it is
-more tolerant, but a single-vintage rebuild keeps both stages clean.
+For a scale-up config, regenerate with:
 
-## Refinement option (deferred)
+```powershell
+python scripts\generate_full_config.py
+```
 
-If the curated village list proves too loose/tight, add a **map bounding-box**
-search (SW/NE lat-lon around 35.52/23.87) as a precision upgrade. Start with the
-village list (robust, simple); precise distance-to-Gerani filtering is already
-handled downstream by the comparables engine after the property scrape captures
-real lat/lon.
+Do not replace baseline properties with candidate CSV rows. Baseline/client
+targets should remain first so subject properties are always included in full
+scrapes and dashboard refreshes.
 
-## No new dependencies
+## Re-Scrape Caveat
 
-Playwright and BeautifulSoup are already project dependencies.
+The comparables benchmark matches peers to the subject on
+`(checkin, lead_time_days, stay_length_days)` windows. For newly added
+properties to be comparable on the same windows, the cleanest path is a single
+combined re-scrape of the full target set, not a separate new-vintage scrape
+stitched onto older data.
+
+## Deferred Refinement
+
+If curated village discovery proves too loose or too tight, add a map
+bounding-box search around Gerani as a precision upgrade. Distance-to-Gerani
+filtering is already handled downstream once the property scrape captures real
+lat/lon.
+
+## Dependencies
+
+No new dependencies were required; Playwright and BeautifulSoup were already in
+the project dependency set.

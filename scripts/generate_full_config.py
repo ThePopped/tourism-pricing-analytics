@@ -1,17 +1,17 @@
 """Generate the full Chania scrape config from the candidate CSV.
 
-The validated 15-property ``config/booking_scraper_config.json`` baseline stays
-untouched. This script derives the Scale-Up Pass config
+The validated ``config/booking_scraper_config.json`` baseline stays untouched.
+This script derives the Scale-Up Pass config
 (``config/booking_scraper_config_chania_full.json``) reproducibly from
-``data/sample/listings_chania_candidates.csv`` so the 438-property target set is
-regenerated from the committed candidate menu rather than hand-maintained.
+``data/sample/listings_chania_candidates.csv`` so the target set is regenerated
+from the committed candidate menu rather than hand-maintained.
 
 It inherits browser/search/timeout/scroll/selector settings from the baseline
 config and overrides only the Scale-Up levers:
 
 - reduced price matrix: ``lead_times [7, 30, 60] x stay_lengths [4, 7]``
 - speed settings: ``headless: true``, ``slow_mo_ms: 0``
-- the full canonicalized, de-duplicated candidate property list
+- the baseline/client targets, followed by new canonicalized candidate targets
 
 Usage::
 
@@ -29,6 +29,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from tourism_pricing_analytics.scraping.booking.urls import canonicalize_property_url
+from scripts.merge_candidates_into_config import merge_candidate_rows
 
 DEFAULT_BASELINE = PROJECT_ROOT / "config" / "booking_scraper_config.json"
 DEFAULT_INPUT = PROJECT_ROOT / "data" / "sample" / "listings_chania_candidates.csv"
@@ -65,7 +66,10 @@ def build_config(baseline: dict, targets: list[dict[str, str]]) -> dict:
     config["browser"] = dict(baseline["browser"])
     config["browser"]["headless"] = True
     config["browser"]["slow_mo_ms"] = 0
-    config["properties"] = targets
+    config["properties"], _ = merge_candidate_rows(
+        baseline.get("properties", []),
+        targets,
+    )
     return config
 
 
@@ -86,7 +90,12 @@ def main() -> None:
         json.dumps(config, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
 
-    print(f"Loaded {len(targets)} unique targets from {csv_path.name}")
+    baseline_count = len(baseline.get("properties", []))
+    print(f"Loaded {len(targets)} unique candidate targets from {csv_path.name}")
+    print(
+        f"Preserved {baseline_count} baseline targets; "
+        f"config now has {len(config['properties'])} total targets"
+    )
     print(f"Matrix: lead_times {LEAD_TIMES} x stay_lengths {STAY_LENGTHS} "
           f"= {len(LEAD_TIMES) * len(STAY_LENGTHS)} dated windows + 1 inventory page")
     print(f"Wrote {output_path.relative_to(PROJECT_ROOT)}")

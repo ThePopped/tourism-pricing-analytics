@@ -5,6 +5,7 @@ from scripts.merge_candidates_into_config import (
     build_merged_config,
     merge_candidate_rows,
 )
+from scripts.generate_full_config import build_config as build_full_config
 from tourism_pricing_analytics.scraping.booking.discovery import (
     SELF_CATERING_HT_IDS,
     build_search_url,
@@ -235,6 +236,49 @@ class DiscoveryMergeTests(unittest.TestCase):
                 "name": "New Property",
                 "url": "https://www.booking.com/hotel/gr/new-property.en-gb.html",
             },
+        )
+
+    def test_full_config_generation_preserves_baseline_targets(self) -> None:
+        baseline = {
+            "seed": 10001,
+            "lead_times": [1, 7, 14, 30, 60],
+            "stay_lengths": [4, 7, 14],
+            "browser": {"headless": False, "slow_mo_ms": 75},
+            "properties": [
+                {
+                    "name": "Client Subject",
+                    "url": "https://www.booking.com/hotel/gr/client.en-gb.html?old=1",
+                }
+            ],
+        }
+        candidates = [
+            {
+                "name": "Client From Discovery",
+                "url": "https://www.booking.com/hotel/gr/client.en-gb.html#rooms",
+            },
+            {
+                "name": "New Chania Property",
+                "url": "https://www.booking.com/hotel/gr/new-chania.en-gb.html?label=abc",
+            },
+        ]
+
+        full_config = build_full_config(baseline, candidates)
+
+        self.assertEqual(full_config["lead_times"], [7, 30, 60])
+        self.assertEqual(full_config["stay_lengths"], [4, 7])
+        self.assertEqual(full_config["browser"], {"headless": True, "slow_mo_ms": 0})
+        self.assertEqual(
+            full_config["properties"],
+            [
+                {
+                    "name": "Client Subject",
+                    "url": "https://www.booking.com/hotel/gr/client.en-gb.html",
+                },
+                {
+                    "name": "New Chania Property",
+                    "url": "https://www.booking.com/hotel/gr/new-chania.en-gb.html",
+                },
+            ],
         )
 
 

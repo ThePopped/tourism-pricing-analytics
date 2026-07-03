@@ -18,6 +18,15 @@ The active implementation area is data ingestion and scraper hardening.
 
 The near-term goal is to broaden fixture and data-quality coverage, keep failure classification reliable, and validate live scraper behavior before expanding the property set.
 
+Recent 20-property pilots found headed 8-worker runs with `--batch-per-worker 1`
+gave the best Booking.com coverage and cleanest challenge signals. Scale beyond
+small pilots gradually, watching `memory_stats.jsonl`, `failures.jsonl`, HTTP
+403/429, `chal_t` URLs, and leftover browser processes.
+
+Full scrape configs must preserve baseline/client targets first, then append
+discovered candidates. Rebuild dashboard tables from full + retry/client runs in
+order, not from retry-only runs.
+
 ## Development Standards
 
 - Use random seed `10001` for reproducible behavior.

@@ -17,11 +17,33 @@ import pandas as pd
 from tourism_pricing_analytics.analysis.segment import segment_self_catering
 
 __all__ = [
+    "DEFAULT_SUBJECT_URL",
+    "default_subject_url",
     "subject_catalog",
     "window_options",
     "shape_dashboard_payload",
     "render_index_html",
 ]
+
+# The client the dashboard is built for. When this property is present in the
+# loaded catalog it is preselected as the benchmark subject; otherwise the
+# dashboard falls back to the highest-coverage self-catering property.
+DEFAULT_SUBJECT_URL = (
+    "https://www.booking.com/hotel/gr/stavros-villas-amp-apartments.en-gb.html"
+)
+
+
+def default_subject_url(catalog: list[dict[str, Any]]) -> str | None:
+    """Return the preselected subject URL for a catalog.
+
+    Prefers :data:`DEFAULT_SUBJECT_URL` (the client property) when it is in the
+    catalog, and otherwise falls back to the first (highest-coverage) entry so
+    the dashboard always has a sensible default.
+    """
+
+    if any(record.get("property_url") == DEFAULT_SUBJECT_URL for record in catalog):
+        return DEFAULT_SUBJECT_URL
+    return catalog[0]["property_url"] if catalog else None
 
 
 def _json_safe(value: object) -> Any:
@@ -156,6 +178,7 @@ def shape_dashboard_payload(
     peer_distribution = benchmark["peer_price_distribution"]
     subject_distribution = benchmark["subject_price_distribution"]
     adjusted = report_payload["adjusted_peer_price_distribution"]
+    band = report_payload.get("adjusted_peer_price_band")
     metrics = report_payload["cv_metrics"]
     gap = report_payload.get("gap_explanation")
     gap_pct = benchmark["price_gap_to_peer_median_pct"]
@@ -208,6 +231,14 @@ def shape_dashboard_payload(
         "peer_price_distribution": _distribution_block(peer_distribution),
         "subject_price_distribution": _distribution_block(subject_distribution),
         "adjusted_peer_price_distribution": _distribution_block(adjusted),
+        "adjusted_peer_price_band": None
+        if not band
+        else {
+            "price": _json_safe(band.get("price")),
+            "lower": _json_safe(band.get("lower")),
+            "upper": _json_safe(band.get("upper")),
+            "coverage": _json_safe(band.get("coverage")),
+        },
         "flags": list(benchmark["peer_set"]["flags"]),
         "peers": _peer_table(benchmark["peers"], peer_limit),
         "ols_premia": premia,
@@ -217,6 +248,10 @@ def shape_dashboard_payload(
             "gbm_r2_log_mean": _json_safe(metrics["r2_log_mean"]),
             "gbm_mae_eur_mean": _json_safe(metrics["mae_eur_mean"]),
             "ols_r2": _json_safe(report_payload["ols_r2"]),
+            "model_family": _json_safe(metrics.get("model_family")),
+            "min_token_frequency": _json_safe(metrics.get("min_token_frequency")),
+            "conformal_coverage": _json_safe(metrics.get("conformal_coverage")),
+            "conformal_residual_count": _json_safe(metrics.get("conformal_residual_count")),
         },
         "gap_explanation": gap_block,
     }
@@ -283,6 +318,16 @@ _INDEX_HTML = """<!doctype html>
   .notice { background:#fff; border:1px solid var(--line); border-radius:8px; padding:16px 18px;
             color:var(--muted); margin-bottom:18px; }
   .notice.warn { background:#fef3c7; border-color:#fde68a; color:#92400e; }
+  .subject-box { background:var(--accent-soft); border:1px solid #bcd7ee; border-left:4px solid var(--accent);
+                 border-radius:8px; padding:12px 16px; margin-bottom:18px; }
+  .subject-box .lab { font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--accent); }
+  .subject-box .name { font-size:17px; font-weight:600; margin-top:2px; }
+  .subject-box .meta { font-size:12px; color:var(--muted); margin-top:2px; word-break:break-all; }
+  .chart { width:100%; overflow-x:auto; }
+  .chart svg { display:block; }
+  .chart .legend { display:flex; flex-wrap:wrap; gap:14px; margin-top:8px; font-size:12px; color:var(--muted); }
+  .chart .legend .key { display:inline-flex; align-items:center; gap:6px; }
+  .chart .legend .swatch { width:18px; height:0; border-top-width:3px; border-top-style:solid; display:inline-block; }
   .badge { display:inline-block; border-radius:999px; padding:4px 14px; font-size:14px; font-weight:600; }
   .badge.act-hold { background:#e0e7ff; color:#3730a3; }
   .badge.act-increase { background:#dcfce7; color:#166534; }
@@ -321,6 +366,7 @@ _INDEX_HTML = """<!doctype html>
   </nav>
   <div id="status">Loading catalog&hellip;</div>
   <div id="report" hidden>
+    <div class="subject-box" id="bench-subject"></div>
     <div class="kpis" id="kpis"></div>
     <section class="card"><h2>Peer price position</h2><div class="scale" id="scale"></div>
       <p class="muted" id="scale-note"></p></section>
@@ -334,11 +380,14 @@ _INDEX_HTML = """<!doctype html>
     <section class="card"><h2>Model &amp; source</h2><div id="model"></div></section>
   </div>
   <div id="movements-view" hidden>
+    <div class="subject-box" id="mv-subject"></div>
     <div class="notice" id="mv-history"></div>
     <div class="kpis" id="mv-kpis"></div>
     <section class="card" id="mv-action-card"><h2>Recommended action</h2><div id="mv-action"></div></section>
+    <section class="card"><h2>Price trend over time</h2><div class="chart" id="mv-chart"></div>
+      <p class="muted">Median price per property per snapshot. Bold line = subject; dashed = competitor mean; thin lines = individual competitors.</p></section>
     <section class="card"><h2>Competitor price movements</h2><div id="mv-peers"></div>
-      <p class="muted">Property-weighted peer medians: each property's median first, then the peer-market median. Latest comparable snapshot.</p></section>
+      <p class="muted">Property-weighted peer medians: each property's median first, then the peer-market median. Latest comparable snapshot. One row per lead-time and stay-length window.</p></section>
     <section class="card"><h2>Subject vs peer timeline</h2><div id="mv-timeline"></div></section>
     <div class="notice" id="mv-covariates"></div>
   </div>
@@ -367,10 +416,18 @@ async function loadMeta() {
   fillSelect($("subject"), meta.subjects, {
     mapper: { value: s => s.property_url,
       label: s => `${s.property_name || s.property_url} (${s.property_type || "?"}, ${s.price_row_count} rows, ${money(s.median_price_per_night)})` }});
+  if (meta.default_subject_url) $("subject").value = meta.default_subject_url;
   fillSelect($("lead"), meta.windows.lead_time_days, {anyLabel: "Any"});
   fillSelect($("stay"), meta.windows.stay_length_days, {anyLabel: "Any"});
   fillSelect($("season"), meta.windows.crete_season, {anyLabel: "Any"});
   $("status").textContent = "";
+}
+
+function subjectBox(el, name, type, url) {
+  el.innerHTML =
+    `<div class="lab">Benchmark run for</div>` +
+    `<div class="name">${name || "Unknown subject"}</div>` +
+    `<div class="meta">${[type, url].filter(Boolean).join(" &middot; ")}</div>`;
 }
 
 function scaleBar(peer, subjMedian, adjMedian) {
@@ -393,6 +450,7 @@ function tableHtml(cols, rows) {
 }
 
 function render(d) {
+  subjectBox($("bench-subject"), d.client.property_name, d.client.property_type, d.client.property_url);
   const k = d.kpis, gapCls = (k.price_gap_to_peer_median ?? 0) >= 0 ? "pos" : "neg";
   $("kpis").innerHTML = [
     ["Subject median", money(k.subject_median), "in selected windows"],
@@ -420,9 +478,12 @@ function render(d) {
   ], d.peers) : "<p class='muted'>No comparable peers were found.</p>";
 
   const a = d.adjusted_peer_price_distribution;
+  const band = d.adjusted_peer_price_band;
+  const bandLabel = band && band.coverage != null ? `${Math.round(band.coverage*100)}% conformal band` : "Conformal band";
   $("adjusted").innerHTML = tableHtml([
     {key:"k",label:"Metric",fmt:v=>v},{key:"v",label:"Value",num:true,fmt:v=>v}],
     [{k:"Raw peer median",v:money(pd.median)},{k:"Adjusted peer median",v:money(a.median)},
+     {k:bandLabel,v:band ? `${money(band.lower)} to ${money(band.upper)}` : "n/a"},
      {k:"Adjusted IQR",v:`${money(a.p25)} to ${money(a.p75)}`},{k:"Adjusted peer rows",v:a.count ?? "n/a"}]);
 
   if (d.gap_explanation) {
@@ -440,10 +501,13 @@ function render(d) {
   ], d.ols_premia) : "<p class='muted'>No premia available.</p>";
 
   const m = d.model;
+  const covLabel = m.conformal_coverage != null ? `${Math.round(m.conformal_coverage*100)}% (${m.conformal_residual_count ?? "n/a"} OOF residuals)` : "n/a";
   $("model").innerHTML = tableHtml([{key:"k",label:"Metric",fmt:v=>v},{key:"v",label:"Value",fmt:v=>v}],
     [{k:"Comparable source table",v:d.source_table},{k:"Hedonic training table",v:d.training_source_table},
      {k:"Training rows",v:m.training_rows},{k:"Training properties",v:m.training_properties},
+     {k:"Selected model",v:m.model_family ?? "n/a"},{k:"Amenity token floor",v:m.min_token_frequency ?? "n/a"},
      {k:"GBM mean log R2",v:num(m.gbm_r2_log_mean,3)},{k:"GBM mean EUR/night MAE",v:money(m.gbm_mae_eur_mean)},
+     {k:"Prediction band",v:covLabel},
      {k:"OLS R2",v:num(m.ols_r2,3)},{k:"Price unit",v:d.price_unit}]);
 
   loaded.benchmark = true;
@@ -461,7 +525,79 @@ function chips(codes, cls) {
   return `<div class="codes">` + codes.map(c => `<span class="code ${cls||''}">${c}</span>`).join("") + `</div>`;
 }
 
+function linePath(pts) {
+  // Build one or more polyline segments, breaking across null gaps.
+  let segs = [], cur = [];
+  for (const p of pts) {
+    if (p == null) { if (cur.length) { segs.push(cur); cur = []; } }
+    else cur.push(p);
+  }
+  if (cur.length) segs.push(cur);
+  return segs;
+}
+
+function lineChart(el, ts) {
+  const dates = (ts && ts.snapshot_dates) || [];
+  const peers = (ts && ts.peers) || [];
+  const subject = ts && ts.subject;
+  const mean = (ts && ts.mean_prices) || [];
+  if (dates.length === 0) { el.innerHTML = "<p class='muted'>Not enough snapshots to plot a trend yet.</p>"; return; }
+
+  const all = [];
+  for (const p of peers) for (const v of p.prices) if (v != null) all.push(v);
+  for (const v of mean) if (v != null) all.push(v);
+  if (subject) for (const v of subject.prices) if (v != null) all.push(v);
+  if (!all.length) { el.innerHTML = "<p class='muted'>No priced snapshots to plot.</p>"; return; }
+
+  const padL = 56, padR = 18, padT = 16, padB = 40;
+  const stepX = Math.max(90, 900 / Math.max(1, dates.length - 1 || 1));
+  const W = padL + padR + stepX * Math.max(1, dates.length - 1);
+  const H = 300;
+  let lo = Math.min(...all), hi = Math.max(...all);
+  if (lo === hi) { lo -= 5; hi += 5; }
+  const padY = (hi - lo) * 0.1; lo -= padY; hi += padY;
+  const X = (i) => padL + (dates.length === 1 ? (W - padL - padR) / 2 : i * stepX);
+  const Y = (v) => padT + (1 - (v - lo) / (hi - lo)) * (H - padT - padB);
+
+  const seg = (prices, stroke, width, dash) => linePath(prices.map((v, i) => v == null ? null : [X(i), Y(v)]))
+    .map(s => s.length === 1
+      ? `<circle cx="${s[0][0].toFixed(1)}" cy="${s[0][1].toFixed(1)}" r="${(width + 1).toFixed(1)}" fill="${stroke}"/>`
+      : `<polyline fill="none" stroke="${stroke}" stroke-width="${width}"${dash ? ` stroke-dasharray="${dash}"` : ""} points="${s.map(p => p[0].toFixed(1) + "," + p[1].toFixed(1)).join(" ")}"/>`)
+    .join("");
+
+  let svg = `<svg viewBox="0 0 ${W.toFixed(0)} ${H}" width="100%" preserveAspectRatio="xMidYMid meet" role="img">`;
+  // Y grid + labels (4 ticks).
+  for (let t = 0; t <= 4; t++) {
+    const v = lo + (hi - lo) * (t / 4), y = Y(v);
+    svg += `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${(W - padR).toFixed(1)}" y2="${y.toFixed(1)}" stroke="#eef1f4" stroke-width="1"/>`;
+    svg += `<text x="${padL - 6}" y="${(y + 3).toFixed(1)}" text-anchor="end" font-size="10" fill="#6b7280">${Math.round(v)}</text>`;
+  }
+  // X labels.
+  for (let i = 0; i < dates.length; i++) {
+    svg += `<text x="${X(i).toFixed(1)}" y="${H - padB + 16}" text-anchor="middle" font-size="10" fill="#6b7280">${dates[i]}</text>`;
+  }
+  // Competitor lines (faint), then mean (dashed), then subject (bold on top).
+  for (const p of peers) svg += seg(p.prices, "#cbd5e1", 1);
+  svg += seg(mean, "#6b7280", 2, "5,4");
+  if (subject) {
+    svg += seg(subject.prices, "#1f4e79", 3);
+    for (let i = 0; i < subject.prices.length; i++)
+      if (subject.prices[i] != null)
+        svg += `<circle cx="${X(i).toFixed(1)}" cy="${Y(subject.prices[i]).toFixed(1)}" r="3.5" fill="#1f4e79"/>`;
+  }
+  svg += `</svg>`;
+
+  const legend = `<div class="legend">` +
+    `<span class="key"><span class="swatch" style="border-top-color:#1f4e79;border-top-width:3px"></span>Subject</span>` +
+    `<span class="key"><span class="swatch" style="border-top-color:#6b7280;border-top-style:dashed"></span>Competitor mean</span>` +
+    `<span class="key"><span class="swatch" style="border-top-color:#cbd5e1"></span>Individual competitors (${peers.length})</span>` +
+    `</div>`;
+  el.innerHTML = svg + legend;
+}
+
 function renderMovements(d) {
+  const q = d.query || {};
+  subjectBox($("mv-subject"), q.subject_name, null, q.subject_url);
   const h = d.history || {};
   const histEl = $("mv-history");
   histEl.className = h.is_low_history ? "notice warn" : "notice";
@@ -487,8 +623,12 @@ function renderMovements(d) {
     `<p class="action-rationale">${ap.rationale || ""}</p>` +
     chips(ap.reason_codes, "") + chips(ap.confidence_flags, "flag");
 
+  lineChart($("mv-chart"), d.peer_timeseries);
+
   $("mv-peers").innerHTML = (d.peer_movements && d.peer_movements.length) ? tableHtml([
     {key:"property_name",label:"Property",fmt:v=>v||"n/a"},
+    {key:"lead_time_days",label:"Lead",num:true,fmt:v=>v==null?"n/a":num(v,0)},
+    {key:"stay_length_days",label:"Stay",num:true,fmt:v=>v==null?"n/a":num(v,0)},
     {key:"availability_state",label:"Availability",fmt:v=>AVAIL_LABEL[v]||v||"n/a"},
     {key:"current_price_per_night",label:"Now",num:true,fmt:v=>money(v)},
     {key:"previous_price_per_night",label:"Previous",num:true,fmt:v=>money(v)},
