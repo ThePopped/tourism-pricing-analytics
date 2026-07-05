@@ -18,10 +18,17 @@ The active implementation area is data ingestion and scraper hardening.
 
 The near-term goal is to broaden fixture and data-quality coverage, keep failure classification reliable, and validate live scraper behavior before expanding the property set.
 
-Recent 20-property pilots found headed 8-worker runs with `--batch-per-worker 1`
-gave the best Booking.com coverage and cleanest challenge signals. Scale beyond
-small pilots gradually, watching `memory_stats.jsonl`, `failures.jsonl`, HTTP
-403/429, `chal_t` URLs, and leftover browser processes.
+A controlled A/B on 2026-07-05 (identical first-100 slice, sequential, shared IP)
+established **8-worker headless with `--batch-per-worker 1` as the default** for
+full runs: it was the fastest arm, lightest on RAM, with coverage within one
+property of headed and challenge signals in the noise band. The full config
+(`booking_scraper_config_chania_full.json`) is headless, and
+`scripts/run_full_scrape.py` defaults to `--workers 8`. Drop to 4 workers only
+when RAM is tight; do not go to 12 (no speed gain past 8 on this
+6-core/12-thread host). Use headed only when a specific client-critical property
+renders availability only under a headed browser. Scale beyond small pilots
+gradually, watching `memory_stats.jsonl`, `failures.jsonl`, HTTP 403/429,
+`chal_t` URLs, and leftover browser processes.
 
 Full scrape configs must preserve baseline/client targets first, then append
 discovered candidates. Rebuild dashboard tables from full + retry/client runs in
@@ -91,5 +98,6 @@ Before data moves downstream, check for impossible prices, missing date fields, 
 - `tourism_pricing_analytics/scraping/booking/parsing.py`
 - `tourism_pricing_analytics/scraping/booking/failures.py`
 - `tourism_pricing_analytics/scraping/booking/io.py`
+- `tourism_pricing_analytics/scraping/booking/registry.py`
 - `tourism_pricing_analytics/scraping/booking/browser.py`
 - `tourism_pricing_analytics/scraping/booking/runner.py`

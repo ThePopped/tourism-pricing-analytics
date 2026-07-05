@@ -18,7 +18,12 @@ from tourism_pricing_analytics.scraping.booking.config import load_scraper_confi
 from tourism_pricing_analytics.scraping.booking.io import (
     create_run_dir,
     resolve_run_search_base_date,
+    save_run_metadata,
     setup_logging,
+)
+from tourism_pricing_analytics.scraping.booking.registry import (
+    append_run_registry,
+    build_run_summary,
 )
 from tourism_pricing_analytics.scraping.booking.memory_probe import (
     MemorySample,
@@ -41,11 +46,17 @@ from tourism_pricing_analytics.scraping.booking.sharding import (
 )
 
 
+# The default full config runs headless (browser.headless=true). A controlled
+# A/B (2026-07-05, first-100 slice, sequential, shared IP) found 8 headless
+# workers with --batch-per-worker 1 the fastest and most memory-efficient arm,
+# with coverage within one property of headed and challenge signals in the noise
+# band. See session_notes.md "July 5 Worker/Headless A/B".
 DEFAULT_FULL_CONFIG_PATH = CONFIG_DIR / "booking_scraper_config_chania_full.json"
-DEFAULT_WORKER_COUNT = 3
+DEFAULT_WORKER_COUNT = 8
 DEFAULT_BATCH_PER_WORKER = 1
 MEMORY_STATS_FILENAME = "memory_stats.jsonl"
 EXIT_CODE_MEMORY_LOW = 3
+REGISTRY_PATH = PROJECT_ROOT / "data" / "run_registry.jsonl"
 
 
 def parse_args() -> argparse.Namespace:
@@ -62,7 +73,10 @@ def parse_args() -> argparse.Namespace:
         "--workers",
         type=int,
         default=DEFAULT_WORKER_COUNT,
-        help="Number of worker processes.",
+        help=(
+            "Number of worker processes. Default 8 is the A/B sweet spot on the "
+            "6-core/12-thread host; drop to 4 only when RAM is tight."
+        ),
     )
     parser.add_argument(
         "--run-dir",
@@ -202,6 +216,7 @@ def _run_round(
 
 
 def main() -> None:
+    run_started_at = datetime.now()
     args = parse_args()
     if args.workers < 1:
         raise SystemExit("--workers must be at least 1")
@@ -252,10 +267,12 @@ def main() -> None:
     attempted_urls: set[str] = set()
     round_number = 0
     memory_low_stop = False
+    status = "completed"
 
     while True:
         if args.max_rounds is not None and round_number >= args.max_rounds:
             logging.info("Reached --max-rounds %d; ending invocation", args.max_rounds)
+            status = "max_rounds_stop"
             break
 
         pending = pending_indexed_targets(
@@ -268,6 +285,7 @@ def main() -> None:
         round_targets = next_round_targets(pending, attempted_urls, round_capacity)
         if not round_targets:
             logging.info("No pending unattempted targets remain; ending round loop")
+            status = "completed"
             break
 
         round_number += 1
@@ -281,6 +299,7 @@ def main() -> None:
                 thresholds,
             ):
                 memory_low_stop = True
+                status = "memory_halt"
                 break
 
         attempted_urls.update(item.target.url for item in round_targets)
@@ -306,6 +325,28 @@ def main() -> None:
 
     validate_and_report_run(run_dir)
     build_and_save_modelling_table(run_dir)
+
+    settings = {
+        "workers": args.workers,
+        "batch_per_worker": args.batch_per_worker,
+        "limit": args.limit,
+        "config": str(args.config),
+        "max_rounds": args.max_rounds,
+        "headless": scraper_config.browser.headless,
+        "seed": scraper_config.seed,
+        "rounds_completed": round_number,
+    }
+    summary = build_run_summary(
+        run_dir,
+        settings=settings,
+        started_at=run_started_at,
+        finished_at=datetime.now(),
+        status=status,
+        artifact_counts=artifact_counts,
+    )
+    save_run_metadata(run_dir, summary)
+    append_run_registry(REGISTRY_PATH, summary)
+    logging.info("Run registry updated: %s", REGISTRY_PATH)
 
     if memory_low_stop:
         logging.error(

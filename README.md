@@ -167,7 +167,11 @@ Current configured defaults:
 - Occupancy: `2` adults, `0` children, `1` room (all prices are 2-guest nightly
   rates; whole-villa / large-party pricing is under-served pending a future
   varied-occupancy re-scrape)
-- Browser: Playwright Chromium, currently configured as non-headless
+- Browser: Playwright Chromium. This baseline config runs non-headless (handy for
+  small targeted/client passes); the full scrape config and
+  `scripts/run_full_scrape.py` default to **headless with 8 workers**, the
+  fastest and most memory-efficient profile per the 2026-07-05 A/B (see
+  `session_notes.md`)
 - Configured properties: 377 Chania/Gerani/Crete targets (Chania town, Gerani,
   Platanias, Agia Marina, Maleme, and neighbouring west-coast areas), including
   the client subject **Stavros Villas & Apartments**
@@ -196,6 +200,16 @@ Typical files:
 - `<property_index>_<property_slug>/`: per-property outputs and debug snapshots.
 
 The generated run directory is local evidence, not project history. Keep only what is useful for debugging or validation. Promote only small representative HTML samples into `data/sample/raw_html/` when they protect durable parser or failure-classification behavior.
+
+Sharded runs launched via `scripts/run_full_scrape.py` also enrich the run's
+`run_metadata.json` at finalize (settings, timing, status, result roll-ups) and
+upsert one row per run into the git-tracked `data/run_registry.jsonl`. Inspect
+the run history with:
+
+```powershell
+python scripts\list_runs.py
+python scripts\list_runs.py --backfill saved_dom\runs\<run_dir>   # seed historical runs
+```
 
 ## Output Record Concepts
 
@@ -266,6 +280,25 @@ model limitations), see
 [docs/analytics/modelling_approach.md](docs/analytics/modelling_approach.md).
 The original staged plan is in
 [docs/analytics/pricing_analytics_roadmap.md](docs/analytics/pricing_analytics_roadmap.md).
+
+### View the dashboard
+
+The local dashboard is the main productized output: an interactive competitive
+positioning and price-movement view over the committed modelling table.
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+python scripts\run_dashboard.py                 # serves http://127.0.0.1:8765/
+python scripts\run_dashboard.py --port 8800 --no-browser
+```
+
+It is a zero-dependency stdlib `http.server` app that fits the hedonic model
+once at startup, then re-runs only the cheap peer benchmark per selection. It
+reads the committed `data/modelling/modelling_table.parquet` plus the
+`hedonic_training_table.parquet`; the **Price Movements** tab additionally uses
+the git-ignored movement-history stores produced by the workflow below. See
+[data/modelling/README.md](data/modelling/README.md) for what it serves and how
+to rebuild those tables.
 
 ## Repeated-Scrape Workflow
 
