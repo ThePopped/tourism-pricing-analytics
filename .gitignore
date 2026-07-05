@@ -10,6 +10,10 @@ notebooks/.ipynb_checkpoints/
 notebooks/saved_dom/
 saved_dom/
 
+# Captured stdout/stderr from local dashboard runs (scripts/run_dashboard.py).
+dashboard_debug.out
+dashboard_debug.err
+
 # Full region-listing dump kept local-only for notebook exploration; tests use
 # the small data/sample/raw_html/listings_chania_sample.html instead.
 data/sample/raw_html/listings_chania.html

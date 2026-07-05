@@ -8,6 +8,14 @@ from playwright.sync_api import Page
 from tourism_pricing_analytics.scraping.booking.models import FailureCategory
 
 
+# HTTP statuses Booking.com serves for bot mitigation rather than real content:
+# 202 ("Accepted") is the soft-block/challenge interstitial, 403/429 are hard
+# blocks/rate limits. These pages often render enough boilerplate to match the
+# property-page markers below, so without an explicit status check they fall
+# through to selector_drift and masquerade as DOM changes. The HTTP status is a
+# more reliable block signal than the scraped page text on a challenge page.
+BLOCKED_STATUS_CODES = frozenset({202, 403, 429})
+
 BLOCKED_CHALLENGE_PATTERNS = [
     "captcha",
     "security check",
@@ -121,6 +129,15 @@ def classify_page_failure(
         return PageFailureClassification(
             category="blocked_challenge",
             reason="Page content matched a blocked, captcha, or human-verification pattern.",
+        )
+
+    if status_code in BLOCKED_STATUS_CODES:
+        return PageFailureClassification(
+            category="blocked_challenge",
+            reason=(
+                f"HTTP {status_code} indicates a bot-mitigation block or "
+                "challenge interstitial, not scraper selector drift."
+            ),
         )
 
     if status_code is not None and status_code >= 500:

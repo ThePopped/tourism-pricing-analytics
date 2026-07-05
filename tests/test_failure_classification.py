@@ -183,6 +183,52 @@ class FailureClassificationTests(unittest.TestCase):
         self.assertIsNotNone(classification)
         self.assertEqual(classification.category, "partial_load")
 
+    def test_classifies_blocked_challenge_from_202_status(self) -> None:
+        # Regression: Booking.com serves HTTP 202 soft-block/challenge pages that
+        # still render property-page boilerplate. These were misclassified as
+        # selector_drift (implying a DOM change) instead of a bot-mitigation
+        # block. The HTTP status must win over the loaded-looking page text.
+        classification = classify_page_failure(
+            padded_html("Property highlights. Room type. Select rooms."),
+            final_url=REQUESTED_URL,
+            requested_url=REQUESTED_URL,
+            expected_selector_count=0,
+            fallback_selector_count=2,
+            status_code=202,
+        )
+
+        self.assertIsNotNone(classification)
+        self.assertEqual(classification.category, "blocked_challenge")
+
+    def test_classifies_blocked_challenge_from_403_and_429(self) -> None:
+        for status_code in (403, 429):
+            with self.subTest(status_code=status_code):
+                classification = classify_page_failure(
+                    padded_html("Property highlights. Room type. Select rooms."),
+                    final_url=REQUESTED_URL,
+                    requested_url=REQUESTED_URL,
+                    expected_selector_count=0,
+                    fallback_selector_count=2,
+                    status_code=status_code,
+                )
+
+                self.assertIsNotNone(classification)
+                self.assertEqual(classification.category, "blocked_challenge")
+
+    def test_blocked_status_takes_precedence_over_empty_availability_text(self) -> None:
+        # A 202 challenge page whose interstitial happens to contain availability
+        # wording is still a block, not genuine empty availability.
+        classification = classify_page_failure(
+            padded_html("No availability for your dates. Change your dates."),
+            final_url=REQUESTED_URL,
+            requested_url=REQUESTED_URL,
+            expected_selector_count=0,
+            status_code=202,
+        )
+
+        self.assertIsNotNone(classification)
+        self.assertEqual(classification.category, "blocked_challenge")
+
     def test_classifies_temporary_booking_error_from_status_code(self) -> None:
         classification = classify_page_failure(
             padded_html("Booking.com"),

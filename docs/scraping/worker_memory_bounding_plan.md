@@ -4,8 +4,10 @@ Status: done (implemented 2026-07-02)
 
 Implementation note: the process-level recycling plan has landed in
 `sharding.py`, `memory_probe.py`, `scripts/run_full_scrape.py`, and the
-corresponding unit tests. Continue full scrapes with `--workers 4` and the
-conservative one-property default batch; memory vigilance is handled at round
+corresponding unit tests. Run full scrapes with the default `--workers 8`
+(headless) and the conservative one-property default batch; drop to `--workers 4`
+only when RAM is tight (see the July 5 A/B in `session_notes.md`). Memory
+vigilance is handled at round
 boundaries through `memory_stats.jsonl`, available-memory checks, nonpaged-pool
 growth checks, and clean resumable stops.
 
