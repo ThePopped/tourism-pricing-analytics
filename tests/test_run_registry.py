@@ -1,6 +1,6 @@
 import json
 import unittest
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -9,6 +9,8 @@ from tourism_pricing_analytics.scraping.booking.registry import (
     build_run_summary,
     count_artifact_records,
     count_priced_properties,
+    inventory_freshness_payload,
+    latest_inventory_feature_run,
     min_available_gib,
     read_validation_summary,
     summarize_failures,
@@ -264,6 +266,83 @@ class CountArtifactRecordsTests(unittest.TestCase):
                 count_artifact_records(run_dir),
                 {"price_rows.jsonl": 2, "failures.jsonl": 1},
             )
+
+
+class InventoryFreshnessTests(unittest.TestCase):
+    def test_selects_latest_completed_stable_feature_run(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            registry_path = root / "run_registry.jsonl"
+            _write_jsonl(
+                registry_path,
+                [
+                    {
+                        "run_id": "old",
+                        "status": "completed",
+                        "finished_at": "2026-06-30T10:00:00",
+                        "artifact_counts": {
+                            "room_inventory.jsonl": 10,
+                            "property_features.jsonl": 10,
+                        },
+                    },
+                    {
+                        "run_id": "missing_features",
+                        "status": "completed",
+                        "finished_at": "2026-07-03T10:00:00",
+                        "artifact_counts": {
+                            "room_inventory.jsonl": 10,
+                            "property_features.jsonl": 0,
+                        },
+                    },
+                    {
+                        "run_id": "fresh",
+                        "status": "completed",
+                        "finished_at": "2026-07-04T10:00:00",
+                        "artifact_counts": {
+                            "room_inventory.jsonl": 12,
+                            "property_features.jsonl": 12,
+                        },
+                    },
+                ],
+            )
+
+            result = latest_inventory_feature_run(registry_path, root / "saved_dom")
+
+        self.assertIsNotNone(result)
+        row, run_dir = result
+        self.assertEqual(row["run_id"], "fresh")
+        self.assertEqual(run_dir, root / "saved_dom" / "runs" / "fresh")
+
+    def test_marks_inventory_stale_when_age_exceeds_threshold(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            registry_path = root / "run_registry.jsonl"
+            _write_jsonl(
+                registry_path,
+                [
+                    {
+                        "run_id": "stable",
+                        "status": "completed",
+                        "finished_at": "2026-06-28T10:00:00",
+                        "artifact_counts": {
+                            "room_inventory.jsonl": 1,
+                            "property_features.jsonl": 1,
+                        },
+                    }
+                ],
+            )
+
+            payload = inventory_freshness_payload(
+                registry_path,
+                root / "saved_dom",
+                max_age_days=7,
+                today=date(2026, 7, 6),
+            )
+
+        self.assertEqual(payload["latest_inventory_run_id"], "stable")
+        self.assertEqual(payload["age_days"], 8)
+        self.assertTrue(payload["is_stale"])
+        self.assertIn("8 days old", payload["reason"])
 
 
 class AppendRunRegistryTests(unittest.TestCase):

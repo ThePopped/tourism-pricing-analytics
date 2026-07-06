@@ -42,6 +42,9 @@ Completed so far:
   `notebooks/property_page_scraper.py` remains a thin manual entrypoint.
 - Structured run-output validation writes a `validation_report.json` per run, and
   each run builds a `modelling_table.jsonl` via the Layer 2 feature join.
+- The sharded production scraper uses a dynamic worker queue and supports
+  `--mode price-only` for daily price collection using fresh room inventory and
+  property features from the run registry.
 - A downstream analytics layer (`tourism_pricing_analytics/analysis/`) delivers a
   comparables-first competitive-positioning benchmark and a supporting hedonic
   adjustment/explanation model, exposed through reports, an Excel workbook, a
@@ -109,6 +112,8 @@ Current package modules:
 - `io.py`: run directories, logging setup, JSONL writing, failure writing, and DOM snapshot saving.
 - `browser.py`: Playwright navigation, cookie dismissal, page recovery, response capture, and scrolling.
 - `runner.py`: scraper orchestration for room inventory and price loops.
+- `sharding.py`, `resume.py`, and `registry.py`: dynamic sharded scheduling,
+  resumability, run summaries, and inventory-freshness resolution.
 
 ## Scrape Strategy
 
@@ -211,6 +216,12 @@ python scripts\list_runs.py
 python scripts\list_runs.py --backfill saved_dom\runs\<run_dir>   # seed historical runs
 ```
 
+The same registry is used by `--mode price-only` to find the latest completed
+run with nonzero `room_inventory.jsonl` and `property_features.jsonl`. If that
+stable inventory source is missing or older than the freshness threshold
+(`--inventory-max-age-days`, default 7), a requested price-only run automatically
+switches to full mode and records the reason in metadata.
+
 ## Output Record Concepts
 
 Room inventory records include:
@@ -308,12 +319,14 @@ movement-history stores, then view the dashboard:
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
-python notebooks\property_page_scraper.py
+python scripts\run_full_scrape.py --mode price-only
 python scripts\append_price_observations.py --latest
 python scripts\run_dashboard.py
 ```
 
 - The scrape writes generated run artifacts under `saved_dom/runs/<timestamp>/`.
+  Price-only mode skips room inventory when a fresh stable source is available;
+  otherwise it automatically runs full mode.
 - The append updates `data/modelling/price_observations.parquet` and
   `data/modelling/offer_presence.parquet` (git-ignored generated operating
   history; deduped by snapshot/property/window/occupancy identity, so re-running
@@ -391,6 +404,14 @@ Run the scraper manually:
 
 ```powershell
 python notebooks\property_page_scraper.py
+```
+
+Run the production sharded scraper:
+
+```powershell
+python scripts\run_full_scrape.py
+python scripts\run_full_scrape.py --mode price-only
+python scripts\run_full_scrape.py --limit 100 --batch-per-worker 2
 ```
 
 Compatibility import check:

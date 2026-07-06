@@ -1,23 +1,27 @@
-# Scraper Speed And Daily Price-Only Plan
+# Scraper Speed And Daily Price-Only Implementation
 
-## Summary
+## Status
 
-Implement four changes as one coordinated scraper upgrade:
+Implemented on 2026-07-06. The upgrade shipped as one coordinated scraper
+change covering:
 
 - Stop writing full HTML snapshots for `empty_availability` failures.
 - Keep `--batch-per-worker` default at `1`, but add a validated path to run/benchmark with `--batch-per-worker 2`.
 - Replace round-barrier scheduling with a dynamic worker scheduler.
 - Add `price_only` daily scrape mode that reuses recent inventory/property features; if the latest stable scrape is older than 7 days, automatically run a full scrape instead and surface freshness in logs, metadata, and dashboard.
 
-## Key Changes
+The live smoke and `--batch-per-worker 2` benchmark remain follow-up validation
+items.
+
+## Implemented Behavior
 
 - **Failure snapshots**
-  - Add a small helper in the scraper runner: save debug HTML only when failure category is not `empty_availability`.
+  - The scraper runner saves debug HTML only when failure category is not `empty_availability`.
   - Keep `failures.jsonl` unchanged; expected empty availability records still include category, reason, requested/final URL, dates, status code, and `snapshot_filename: null`.
   - Continue saving snapshots for `selector_drift`, `blocked_challenge`, `redirect`, `navigation_error`, `temporary_booking_error`, `partial_load`, and `extraction_error`.
 
 - **Dynamic scheduler**
-  - Replace the current round loop in `scripts/run_full_scrape.py` with a parent-side dynamic queue:
+  - `scripts/run_full_scrape.py` now uses a parent-side dynamic queue:
     - Start up to `--workers` processes.
     - Each process receives up to `--batch-per-worker` pending properties.
     - When a process finishes, immediately schedule the next batch if memory is healthy.
@@ -27,9 +31,9 @@ Implement four changes as one coordinated scraper upgrade:
   - Record scheduler metadata: `scheduler="dynamic_queue"`, `batch_per_worker`, `worker_batches_completed`, `memory_halt`, and existing worker/headless/config fields.
 
 - **Price-only mode and inventory freshness**
-  - Add CLI mode to `scripts/run_full_scrape.py`: `--mode full|price-only`, default `full`.
-  - Add `--inventory-max-age-days`, default `7`.
-  - Add inventory freshness resolution from `data/run_registry.jsonl`, selecting the latest completed run with nonzero `room_inventory.jsonl` and `property_features.jsonl`.
+  - Added CLI mode to `scripts/run_full_scrape.py`: `--mode full|price-only`, default `full`.
+  - Added `--inventory-max-age-days`, default `7`.
+  - Added inventory freshness resolution from `data/run_registry.jsonl`, selecting the latest completed run with nonzero `room_inventory.jsonl` and `property_features.jsonl`.
   - For `--mode price-only`:
     - If latest inventory/property-feature scrape is fresh, skip `run_room_inventory_loop`.
     - Run only price collection.
@@ -39,11 +43,11 @@ Implement four changes as one coordinated scraper upgrade:
   - Add price-only resume logic that considers price windows complete without requiring same-run inventory artifacts.
 
 - **Dashboard freshness warning**
-  - Add inventory freshness status to `/api/meta`: latest inventory run id, finished date, age days, stale threshold, and `is_stale`.
+  - Added inventory freshness status to `/api/meta`: latest inventory run id, finished date, age days, stale threshold, and `is_stale`.
   - Render a dashboard notice when inventory/property features are stale or unknown.
   - Keep benchmark and movement calculations unchanged; the warning is informational.
 
-## Test Plan
+## Verification Completed
 
 - Unit tests:
   - `empty_availability` failures create failure records with `snapshot_filename: null`.
@@ -58,12 +62,21 @@ Implement four changes as one coordinated scraper upgrade:
   - Rendered HTML includes a mount point/warning behavior for stale inventory.
   - Fresh inventory produces no warning state.
 
-- Full verification:
-  - Run focused tests for runner, resume, registry/freshness, dashboard, and price-observation paths.
-  - Run `python -m unittest discover -s tests`.
-  - Run compile checks for scraper, dashboard, and scripts.
-  - Live smoke: `python scripts\run_full_scrape.py --limit 3 --mode price-only`.
-  - Benchmark trial: `python scripts\run_full_scrape.py --limit 100 --batch-per-worker 2`, compare duration, memory stats, challenge/failure rate, and validation against the current 8-worker baseline.
+Commands run:
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests
+.\.venv\Scripts\python.exe -m py_compile $(rg --files -g "*.py")
+.\.venv\Scripts\python.exe scripts\run_full_scrape.py --help
+```
+
+Result: 391 tests passed; compile checks passed.
+
+## Follow-Up Live Validation
+
+- Live smoke: `python scripts\run_full_scrape.py --limit 3 --mode price-only`.
+- Benchmark trial: `python scripts\run_full_scrape.py --limit 100 --batch-per-worker 2`.
+- Compare duration, memory stats, challenge/failure rate, and validation against the current 8-worker baseline.
 
 ## Assumptions
 

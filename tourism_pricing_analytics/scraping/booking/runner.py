@@ -140,6 +140,23 @@ def save_failure_snapshot(
         return None
 
 
+def should_save_failure_snapshot(category: FailureCategory) -> bool:
+    """Return whether a failure category merits a debug HTML snapshot."""
+
+    return category != "empty_availability"
+
+
+def save_failure_snapshot_for_category(
+    page: Page | None,
+    output_dir: Path,
+    filename: str,
+    category: FailureCategory,
+) -> str | None:
+    if not should_save_failure_snapshot(category):
+        return None
+    return save_failure_snapshot(page, output_dir, filename)
+
+
 def get_page_url(page: Page | None) -> str | None:
     if page is None or page.is_closed():
         return None
@@ -286,7 +303,12 @@ def run_room_inventory_loop(
 
                 logging.exception("Room inventory extraction failed for %s", target.name)
                 filename = f"room_inventory_{classification.category}.html"
-                snapshot_filename = save_failure_snapshot(page, output_dir, filename)
+                snapshot_filename = save_failure_snapshot_for_category(
+                    page,
+                    output_dir,
+                    filename,
+                    classification.category,
+                )
                 failure_record = build_failure_record(
                     target_name=target.name,
                     target_url=target.url,
@@ -341,7 +363,12 @@ def run_room_inventory_loop(
                 classification.category,
             )
             filename = f"room_inventory_{classification.category}.html"
-            snapshot_filename = save_failure_snapshot(page, output_dir, filename)
+            snapshot_filename = save_failure_snapshot_for_category(
+                page,
+                output_dir,
+                filename,
+                classification.category,
+            )
             failure_record = build_failure_record(
                 target_name=target.name,
                 target_url=target.url,
@@ -504,7 +531,12 @@ def run_price_loop(
                             f"price_rows_{classification.category}_lead_{lead_time_days:03d}"
                             f"_stay_{stay_length_days:03d}.html"
                         )
-                        snapshot_filename = save_failure_snapshot(page, output_dir, filename)
+                        snapshot_filename = save_failure_snapshot_for_category(
+                            page,
+                            output_dir,
+                            filename,
+                            classification.category,
+                        )
                         failure_record = build_failure_record(
                             target_name=target.name,
                             target_url=target.url,
@@ -570,7 +602,12 @@ def run_price_loop(
                         f"price_rows_{classification.category}_lead_{lead_time_days:03d}"
                         f"_stay_{stay_length_days:03d}.html"
                     )
-                    snapshot_filename = save_failure_snapshot(page, output_dir, filename)
+                    snapshot_filename = save_failure_snapshot_for_category(
+                        page,
+                        output_dir,
+                        filename,
+                        classification.category,
+                    )
                     failure_record = build_failure_record(
                         target_name=target.name,
                         target_url=target.url,
@@ -674,6 +711,7 @@ def run(
     finalize_run: bool = True,
     worker_id: str | None = None,
     search_base_date: date | None = None,
+    price_only: bool = False,
 ) -> None:
     search_base_date = search_base_date or resolve_run_search_base_date(run_dir)
     browser = playwright.chromium.launch(
@@ -699,6 +737,7 @@ def run(
             scraper_config.lead_times,
             scraper_config.stay_lengths,
             search_base_date,
+            price_only=price_only,
         )
         pending_properties = [item.target for item in indexed_pending_properties]
         skipped_count = len(indexed_requested_properties) - len(pending_properties)
@@ -731,22 +770,26 @@ def run(
                 len(indexed_requested_properties),
             )
 
-        (
-            context,
-            page,
-            room_inventory_records,
-            property_feature_records,
-            room_inventory_failures,
-        ) = run_room_inventory_loop(
-            browser=browser,
-            context=context,
-            page=page,
-            scraper_config=active_config,
-            property_output_dirs=property_output_dirs,
-        )
-        # Start the long price phase on a fresh context so it does not inherit the
-        # renderer/network growth accumulated during the room inventory phase.
-        context, page = recycle_context(browser, context, scraper_config)
+        room_inventory_failures: list[ScrapeFailureRecord] = []
+        if price_only:
+            logging.info("Skipping room inventory phase for price-only scrape")
+        else:
+            (
+                context,
+                page,
+                _room_inventory_records,
+                _property_feature_records,
+                room_inventory_failures,
+            ) = run_room_inventory_loop(
+                browser=browser,
+                context=context,
+                page=page,
+                scraper_config=active_config,
+                property_output_dirs=property_output_dirs,
+            )
+            # Start the long price phase on a fresh context so it does not inherit the
+            # renderer/network growth accumulated during the room inventory phase.
+            context, page = recycle_context(browser, context, scraper_config)
         (
             context,
             page,

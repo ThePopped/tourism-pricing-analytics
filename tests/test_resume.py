@@ -136,6 +136,28 @@ class ResumeHelpersTests(unittest.TestCase):
                 is_property_complete(Path(tmp), 1, self.target, [7], [4])
             )
 
+    def test_price_only_completion_does_not_require_same_run_inventory(self) -> None:
+        with TemporaryDirectory() as tmp:
+            property_dir = expected_property_dir(Path(tmp), 1, self.target)
+            _write_jsonl(
+                property_dir / "price_rows.jsonl",
+                [_price_record(self.target, 7, 4)],
+            )
+
+            self.assertFalse(
+                is_property_complete(Path(tmp), 1, self.target, [7], [4])
+            )
+            self.assertTrue(
+                is_property_complete(
+                    Path(tmp),
+                    1,
+                    self.target,
+                    [7],
+                    [4],
+                    price_only=True,
+                )
+            )
+
     def test_successful_price_rows_complete_property(self) -> None:
         with TemporaryDirectory() as tmp:
             property_dir = expected_property_dir(Path(tmp), 1, self.target)

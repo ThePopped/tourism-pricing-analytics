@@ -192,6 +192,8 @@ def is_property_complete(
     lead_times: list[int],
     stay_lengths: list[int],
     search_base_date: date | None = None,
+    *,
+    price_only: bool = False,
 ) -> bool:
     """Return whether a property's persisted artifacts prove terminal progress."""
 
@@ -199,7 +201,7 @@ def is_property_complete(
     if not property_dir.is_dir():
         return False
 
-    if not _has_inventory_terminal_artifact(property_dir, target):
+    if not price_only and not _has_inventory_terminal_artifact(property_dir, target):
         return False
 
     if search_base_date is not None:
@@ -226,6 +228,8 @@ def pending_targets(
     lead_times: list[int],
     stay_lengths: list[int],
     search_base_date: date | None = None,
+    *,
+    price_only: bool = False,
 ) -> list[PropertyTarget]:
     """Return configured targets whose per-property artifacts are incomplete."""
 
@@ -239,5 +243,6 @@ def pending_targets(
             lead_times,
             stay_lengths,
             search_base_date,
+            price_only=price_only,
         )
     ]

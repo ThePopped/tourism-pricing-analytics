@@ -4,10 +4,12 @@ from datetime import date
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from scripts.run_full_scrape import effective_scrape_mode
 from tourism_pricing_analytics.scraping.booking.models import PropertyTarget
 from tourism_pricing_analytics.scraping.booking.sharding import (
     aggregate_run_artifacts,
     indexed_targets,
+    next_dynamic_batch,
     next_round_targets,
     pending_indexed_targets,
     split_indexed_targets,
@@ -64,6 +66,17 @@ def _price_record(target: PropertyTarget, marker: str) -> dict:
 
 
 class ShardedScrapeDriverTests(unittest.TestCase):
+    def test_price_only_mode_auto_switches_to_full_when_inventory_is_stale(self) -> None:
+        self.assertEqual(
+            effective_scrape_mode("price-only", {"is_stale": True}),
+            "full",
+        )
+        self.assertEqual(
+            effective_scrape_mode("price-only", {"is_stale": False}),
+            "price_only",
+        )
+        self.assertEqual(effective_scrape_mode("full", {"is_stale": False}), "full")
+
     def test_split_indexed_targets_is_contiguous_and_balanced(self) -> None:
         targets = indexed_targets([_target(index) for index in range(1, 6)])
 
@@ -116,6 +129,17 @@ class ShardedScrapeDriverTests(unittest.TestCase):
         result = next_round_targets(targets, attempted, 3)
 
         self.assertEqual([item.index for item in result], [1, 3, 4])
+
+    def test_next_dynamic_batch_advances_without_round_barrier(self) -> None:
+        targets = indexed_targets([_target(index) for index in range(1, 6)])
+        attempted: set[str] = set()
+
+        first = next_dynamic_batch(targets, attempted, 2)
+        attempted.update(item.target.url for item in first)
+        second = next_dynamic_batch(targets, attempted, 2)
+
+        self.assertEqual([item.index for item in first], [1, 2])
+        self.assertEqual([item.index for item in second], [3, 4])
 
     def test_pending_indexed_targets_uses_full_config_indexes_for_resume(self) -> None:
         targets = indexed_targets([_target(1), _target(2), _target(3)])

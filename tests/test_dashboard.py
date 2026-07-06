@@ -97,6 +97,7 @@ class RenderIndexTests(unittest.TestCase):
         html = render_index_html()
         self.assertIn("Competitive Pricing Dashboard", html)
         self.assertIn('id="subject"', html)
+        self.assertIn('id="inventory-notice"', html)
         self.assertIn("api/benchmark", html)
         self.assertIn("api/meta", html)
 
@@ -129,6 +130,13 @@ class RenderIndexTests(unittest.TestCase):
         # The default subject is preselected in the dropdown.
         self.assertIn("meta.default_subject_url", html)
 
+    def test_index_html_has_inventory_freshness_warning_behavior(self) -> None:
+        html = render_index_html()
+        self.assertIn("renderInventoryFreshness", html)
+        self.assertIn("meta.inventory_freshness", html)
+        self.assertIn("Inventory/property features may be stale", html)
+        self.assertIn("el.hidden = true", html)
+
 
 class DefaultSubjectTests(unittest.TestCase):
     def test_default_prefers_client_url_when_present(self) -> None:
@@ -157,6 +165,7 @@ class DashboardServiceTests(unittest.TestCase):
         meta = service.meta()
         self.assertEqual(meta["default_subject_url"], service.catalog[0]["property_url"])
         self.assertTrue(meta["subjects"])
+        self.assertIn("inventory_freshness", meta)
 
         bundle_id = id(service.bundle)
         payload = service.benchmark(
@@ -171,6 +180,29 @@ class DashboardServiceTests(unittest.TestCase):
         self.assertEqual(id(service.bundle), bundle_id)
         self.assertEqual(payload["client"]["property_url"], "subject")
         json.dumps(payload)
+
+    def test_service_meta_includes_fresh_inventory_payload(self) -> None:
+        frame = sample_hedonic_frame()
+        freshness = {
+            "latest_inventory_run_id": "run_fresh",
+            "source_run_dir": "saved_dom/runs/run_fresh",
+            "finished_at": "2026-07-06T08:00:00",
+            "age_days": 0,
+            "stale_threshold_days": 7,
+            "is_stale": False,
+            "reason": None,
+        }
+        service = DashboardService(
+            frame,
+            source_table="synthetic.parquet",
+            min_token_frequency=1,
+            observations=pd.DataFrame(columns=PRICE_OBSERVATION_COLUMNS),
+            presence=pd.DataFrame(columns=OFFER_PRESENCE_COLUMNS),
+            covariates=pd.DataFrame(columns=DEMAND_COVARIATE_COLUMNS),
+            inventory_freshness=freshness,
+        )
+
+        self.assertEqual(service.meta()["inventory_freshness"], freshness)
 
     def test_benchmark_defaults_to_first_catalog_subject(self) -> None:
         frame = sample_hedonic_frame()

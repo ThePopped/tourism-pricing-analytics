@@ -213,6 +213,67 @@ class RunnerFailureRecordingTests(unittest.TestCase):
         append_failures.assert_not_called()
         save_snapshot.assert_not_called()
 
+    def test_empty_availability_failure_does_not_save_snapshot(self) -> None:
+        target = PropertyTarget(
+            name="Example Hotel",
+            url="https://www.booking.com/hotel/gr/example.en-gb.html",
+        )
+        scraper_config = _scraper_config(
+            target,
+            retry=RetryConfig(
+                max_attempts=1,
+                base_backoff_ms=0,
+                max_backoff_ms=0,
+                jitter_ms=0,
+            ),
+        )
+        page = FakePage()
+
+        with (
+            patch(
+                "tourism_pricing_analytics.scraping.booking.runner.build_date_window",
+                return_value=(date(2026, 6, 21), date(2026, 6, 25)),
+            ),
+            patch(
+                "tourism_pricing_analytics.scraping.booking.runner.ensure_page",
+                return_value=page,
+            ),
+            patch(
+                "tourism_pricing_analytics.scraping.booking.runner.navigate_to_page",
+                return_value=200,
+            ),
+            patch(
+                "tourism_pricing_analytics.scraping.booking.runner.extract_price_rows",
+                return_value=[],
+            ),
+            patch(
+                "tourism_pricing_analytics.scraping.booking.runner.classify_current_page_failure",
+                return_value=PageFailureClassification(
+                    category="empty_availability",
+                    reason="Synthetic no availability.",
+                ),
+            ),
+            patch(
+                "tourism_pricing_analytics.scraping.booking.runner.save_failure_snapshot",
+            ) as save_snapshot,
+            patch(
+                "tourism_pricing_analytics.scraping.booking.runner.append_property_failures",
+            ),
+        ):
+            _ctx, _, price_rows, _room_features, failures = run_price_loop(
+                browser=object(),
+                context=object(),
+                page=page,
+                scraper_config=scraper_config,
+                property_output_dirs={target.url: Path("saved_dom/example")},
+            )
+
+        self.assertEqual(price_rows, [])
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(failures[0].category, "empty_availability")
+        self.assertIsNone(failures[0].snapshot_filename)
+        save_snapshot.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

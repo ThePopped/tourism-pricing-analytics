@@ -365,6 +365,7 @@ _INDEX_HTML = """<!doctype html>
     <button class="tab" data-tab="movements" id="tab-movements">Price Movements</button>
   </nav>
   <div id="status">Loading catalog&hellip;</div>
+  <div class="notice warn" id="inventory-notice" hidden></div>
   <div id="report" hidden>
     <div class="subject-box" id="bench-subject"></div>
     <div class="kpis" id="kpis"></div>
@@ -420,7 +421,21 @@ async function loadMeta() {
   fillSelect($("lead"), meta.windows.lead_time_days, {anyLabel: "Any"});
   fillSelect($("stay"), meta.windows.stay_length_days, {anyLabel: "Any"});
   fillSelect($("season"), meta.windows.crete_season, {anyLabel: "Any"});
+  renderInventoryFreshness(meta.inventory_freshness);
   $("status").textContent = "";
+}
+
+function renderInventoryFreshness(freshness) {
+  const el = $("inventory-notice");
+  if (!freshness || freshness.is_stale !== false) {
+    const reason = freshness && freshness.reason ? freshness.reason : "Inventory/property feature freshness is unknown.";
+    const threshold = freshness && freshness.stale_threshold_days != null ? freshness.stale_threshold_days : "n/a";
+    el.textContent = `Inventory/property features may be stale: ${reason} Threshold: ${threshold} days.`;
+    el.hidden = false;
+    return;
+  }
+  el.textContent = "";
+  el.hidden = true;
 }
 
 function subjectBox(el, name, type, url) {

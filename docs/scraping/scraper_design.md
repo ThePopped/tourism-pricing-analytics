@@ -21,7 +21,12 @@ Current behavior:
 - Writes timestamped JSONL outputs under `saved_dom/runs/<timestamp>/`
 - Writes per-property output directories inside each run directory
 - Classifies failures into machine-readable categories in `failures.jsonl`
-- Saves debug HTML snapshots for empty, failed, or suspicious windows
+- Saves debug HTML snapshots for failed or suspicious windows, except expected
+  `empty_availability` pages where `snapshot_filename` stays null
+- Supports sharded full scrapes through a dynamic worker queue in
+  `scripts/run_full_scrape.py`
+- Supports daily `--mode price-only` scrapes that reuse fresh room inventory and
+  property features from the run registry
 - Protects parser, URL, config, failure-classification, and runner failure-recording behavior with `unittest` coverage
 
 ## Generated Output Retention Policy
@@ -129,6 +134,15 @@ Why this loop exists:
 - The undated page gives a better room-type catalog
 - This loop does not need to run daily unless property structure changes
 
+Current production cadence:
+- Full scrapes run this loop and write `room_inventory.jsonl` plus
+  `property_features.jsonl`.
+- Daily price-only scrapes skip this loop when the latest completed stable run in
+  `data/run_registry.jsonl` has nonzero inventory/property-feature artifacts and
+  is within the configured freshness threshold.
+- If the latest stable run is missing or stale, a requested price-only scrape
+  automatically upgrades to full mode.
+
 ### Loop 2: Price Collection
 
 Purpose:
@@ -221,3 +235,28 @@ assert property_count * room_types * lead_times * stay_length_count == 4500
 ```
 
 The current scrape design should treat 4,500 as the rough order of magnitude for daily price collection, while keeping the room inventory loop on a slower cadence.
+
+## Orchestration Notes
+
+`scripts/run_full_scrape.py` is the production sharded entrypoint.
+
+- Default profile: 8 workers, headless, `--batch-per-worker 1`.
+- Scheduler: dynamic parent-side queue. Up to `--workers` child processes run at
+  once; each child receives up to `--batch-per-worker` pending properties.
+- Memory checks happen before scheduling replacement workers and after worker
+  completion. If memory is low, already-running workers finish but no new
+  batches are scheduled.
+- Run metadata records scheduler, worker batch count, memory halt state,
+  requested/effective mode, and inventory freshness.
+
+Daily price collection can use:
+
+```powershell
+python scripts\run_full_scrape.py --mode price-only
+```
+
+Benchmarking batch size 2 should be done explicitly:
+
+```powershell
+python scripts\run_full_scrape.py --limit 100 --batch-per-worker 2
+```

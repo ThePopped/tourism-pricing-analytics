@@ -8,7 +8,7 @@ row are the same object, so the two records cannot drift.
 """
 
 import json
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from tourism_pricing_analytics.scraping.booking.io import load_run_metadata
@@ -20,6 +20,127 @@ FAILURES_FILENAME = "failures.jsonl"
 PRICE_ROWS_FILENAME = "price_rows.jsonl"
 MEMORY_STATS_FILENAME = "memory_stats.jsonl"
 VALIDATION_REPORT_FILENAME = "validation_report.json"
+ROOM_INVENTORY_FILENAME = "room_inventory.jsonl"
+PROPERTY_FEATURES_FILENAME = "property_features.jsonl"
+
+
+def read_run_registry(registry_path: Path) -> list[dict]:
+    """Read registry JSONL rows, skipping malformed lines."""
+
+    rows: list[dict] = []
+    if not registry_path.exists():
+        return rows
+    for line in registry_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
+
+
+def _artifact_count(row: dict, filename: str) -> int:
+    artifact_counts = row.get("artifact_counts")
+    if not isinstance(artifact_counts, dict):
+        return 0
+    value = artifact_counts.get(filename)
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, (int, float)):
+        return int(value)
+    return 0
+
+
+def _parse_datetime(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def has_stable_inventory_features(row: dict) -> bool:
+    """Return whether a registry row has nonempty stable feature artifacts."""
+
+    return (
+        row.get("status") == "completed"
+        and _artifact_count(row, ROOM_INVENTORY_FILENAME) > 0
+        and _artifact_count(row, PROPERTY_FEATURES_FILENAME) > 0
+    )
+
+
+def latest_inventory_feature_run(
+    registry_path: Path,
+    output_root: Path,
+) -> tuple[dict, Path] | None:
+    """Return the latest completed run with nonzero inventory/property features."""
+
+    candidates: list[tuple[datetime, dict, Path]] = []
+    for row in read_run_registry(registry_path):
+        if not has_stable_inventory_features(row):
+            continue
+        run_id = row.get("run_id")
+        finished_at = _parse_datetime(row.get("finished_at"))
+        if not isinstance(run_id, str) or finished_at is None:
+            continue
+        run_dir = output_root / "runs" / run_id
+        candidates.append((finished_at, row, run_dir))
+
+    if not candidates:
+        return None
+
+    _finished_at, row, run_dir = max(candidates, key=lambda item: item[0])
+    return row, run_dir
+
+
+def inventory_freshness_payload(
+    registry_path: Path,
+    output_root: Path,
+    *,
+    max_age_days: int,
+    today: date | None = None,
+) -> dict:
+    """Describe whether the latest stable inventory/property-feature run is fresh."""
+
+    today = today or date.today()
+    latest = latest_inventory_feature_run(registry_path, output_root)
+    base_payload = {
+        "latest_inventory_run_id": None,
+        "source_run_dir": None,
+        "finished_at": None,
+        "age_days": None,
+        "stale_threshold_days": max_age_days,
+        "is_stale": True,
+        "reason": "No completed run has nonzero room inventory and property features.",
+    }
+    if latest is None:
+        return base_payload
+
+    row, run_dir = latest
+    finished_at = _parse_datetime(row.get("finished_at"))
+    if finished_at is None:
+        return base_payload
+
+    age_days = (today - finished_at.date()).days
+    is_stale = age_days > max_age_days
+    return {
+        "latest_inventory_run_id": row.get("run_id"),
+        "source_run_dir": str(run_dir),
+        "finished_at": finished_at.isoformat(timespec="seconds"),
+        "age_days": age_days,
+        "stale_threshold_days": max_age_days,
+        "is_stale": is_stale,
+        "reason": None
+        if not is_stale
+        else (
+            f"Latest inventory/property-feature run is {age_days} days old, "
+            f"above the {max_age_days}-day threshold."
+        ),
+    }
 
 
 def summarize_failures(run_dir: Path) -> dict:

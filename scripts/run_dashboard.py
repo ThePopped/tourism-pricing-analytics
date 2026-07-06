@@ -63,6 +63,12 @@ from tourism_pricing_analytics.analysis.movement import (
     market_pressure_index,
     movement_history_status,
 )
+from tourism_pricing_analytics.scraping.booking.registry import inventory_freshness_payload
+
+
+RUN_REGISTRY_PATH = REPO_ROOT / "data" / "run_registry.jsonl"
+DEFAULT_SCRAPE_OUTPUT_ROOT = REPO_ROOT / "saved_dom"
+DEFAULT_INVENTORY_MAX_AGE_DAYS = 7
 
 
 def _json_safe(value: object) -> Any:
@@ -227,6 +233,18 @@ def _default_low_history_action(message: str) -> dict[str, Any]:
     }
 
 
+def unknown_inventory_freshness(max_age_days: int = DEFAULT_INVENTORY_MAX_AGE_DAYS) -> dict[str, Any]:
+    return {
+        "latest_inventory_run_id": None,
+        "source_run_dir": None,
+        "finished_at": None,
+        "age_days": None,
+        "stale_threshold_days": max_age_days,
+        "is_stale": True,
+        "reason": "Inventory freshness has not been resolved for this dashboard session.",
+    }
+
+
 class DashboardService:
     """Loads the table, fits the hedonic model once, and answers benchmarks."""
 
@@ -241,6 +259,7 @@ class DashboardService:
         observations: pd.DataFrame | None = None,
         presence: pd.DataFrame | None = None,
         covariates: pd.DataFrame | None = None,
+        inventory_freshness: dict[str, Any] | None = None,
     ) -> None:
         self.frame = frame
         self.source_table = source_table
@@ -258,6 +277,7 @@ class DashboardService:
         self._subject_names = {
             record["property_url"]: record["property_name"] for record in self.catalog
         }
+        self.inventory_freshness = inventory_freshness or unknown_inventory_freshness()
 
     def meta(self) -> dict[str, Any]:
         return {
@@ -266,6 +286,7 @@ class DashboardService:
             "source_table": self.source_table,
             "training_source_table": self.training_source_table,
             "default_subject_url": self._default_subject_url,
+            "inventory_freshness": self.inventory_freshness,
         }
 
     def benchmark(
@@ -516,6 +537,11 @@ def main() -> None:
         observations=observations,
         presence=presence,
         covariates=covariates,
+        inventory_freshness=inventory_freshness_payload(
+            RUN_REGISTRY_PATH,
+            DEFAULT_SCRAPE_OUTPUT_ROOT,
+            max_age_days=DEFAULT_INVENTORY_MAX_AGE_DAYS,
+        ),
     )
     print(
         f"Ready: {len(service.catalog)} self-catering subjects, "

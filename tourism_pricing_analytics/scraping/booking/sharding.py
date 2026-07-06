@@ -56,6 +56,8 @@ def pending_indexed_targets(
     lead_times: list[int],
     stay_lengths: list[int],
     search_base_date: date | None = None,
+    *,
+    price_only: bool = False,
 ) -> list[IndexedTarget]:
     """Return indexed targets whose persisted artifacts are incomplete."""
 
@@ -69,8 +71,27 @@ def pending_indexed_targets(
             lead_times,
             stay_lengths,
             search_base_date,
+            price_only=price_only,
         )
     ]
+
+
+def next_dynamic_batch(
+    pending: list[IndexedTarget],
+    attempted_urls: set[str],
+    batch_size: int,
+) -> list[IndexedTarget]:
+    """Return the next pending batch not yet attempted this invocation.
+
+    ``batch_size <= 0`` means no cap. Pending order is preserved so a dynamic
+    scheduler walks the config in the same order as a single-pass run without
+    waiting for a full round of workers to finish.
+    """
+
+    remaining = [item for item in pending if item.target.url not in attempted_urls]
+    if batch_size <= 0:
+        return remaining
+    return remaining[:batch_size]
 
 
 def next_round_targets(
@@ -84,10 +105,7 @@ def next_round_targets(
     the config in the same order as a single-pass run.
     """
 
-    remaining = [item for item in pending if item.target.url not in attempted_urls]
-    if capacity <= 0:
-        return remaining
-    return remaining[:capacity]
+    return next_dynamic_batch(pending, attempted_urls, capacity)
 
 
 def split_indexed_targets(
