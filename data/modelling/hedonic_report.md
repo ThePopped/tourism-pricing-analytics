@@ -10,9 +10,9 @@ Price unit: EUR/night for a 2-guest Booking.com search. The model explains liste
 - Rows: 2668
 - Properties: 306
 - Grouped CV folds: 5
-- GBM mean log R2: 0.540
-- GBM mean log MAE: 0.262
-- GBM mean EUR/night MAE: EUR 52.35
+- GBM mean log R2: 0.533
+- GBM mean log MAE: 0.265
+- GBM mean EUR/night MAE: EUR 53.36
 - OLS R2: 0.702
 - OLS condition number: 102142529888187984.0
 
@@ -44,9 +44,9 @@ Price unit: EUR/night for a 2-guest Booking.com search. The model explains liste
 
 - Client: Stavros Villas & Apartments
 - Raw peer median: EUR 105.57
-- Feature-adjusted peer median: EUR 185.21
-- 80% conformal band: EUR 129.59 to EUR 306.93
-- Feature-adjusted IQR: EUR 170.77 to EUR 196.74
+- Feature-adjusted peer median: EUR 110.38
+- 80% conformal band: EUR 77.43 to EUR 185.57
+- Feature-adjusted IQR: EUR 99.43 to EUR 126.94
 - Adjusted peer rows: 185
 
 ## Price Gap Decomposition
@@ -54,6 +54,6 @@ Price unit: EUR/night for a 2-guest Booking.com search. The model explains liste
 - Client observed price: EUR 128.75
 - Competitor observed price: EUR 84.75
 - Observed gap: EUR 44.00
-- Feature-explained gap: EUR 53.35
-- Residual gap: EUR -9.35
+- Feature-explained gap: EUR 52.35
+- Residual gap: EUR -8.35
 

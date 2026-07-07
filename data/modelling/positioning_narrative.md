@@ -35,21 +35,21 @@ Closest comparables by proximity and similarity:
 A raw price comparison is unfair if your property is genuinely better or differently equipped than the peers. The hedonic model adjusts peer prices to your measurable feature and quality profile, so you compare like with like.
 
 - Raw comparable median: EUR 105.57
-- Feature-matched comparable median (peers adjusted to your quality): EUR 185.21
-- 80% likely range for that feature-matched figure: EUR 129.59 to EUR 306.93
+- Feature-matched comparable median (peers adjusted to your quality): EUR 110.38
+- 80% likely range for that feature-matched figure: EUR 77.43 to EUR 185.57
 - Your median asking price: EUR 216.50
 
 Splitting your gap over the raw comparable median:
 
-- Feature adjustment versus raw peers: EUR 79.64
-- Unexplained premium (pricing power or over-pricing risk): EUR 31.29
+- Feature adjustment versus raw peers: EUR 4.81
+- Unexplained premium (pricing power or over-pricing risk): EUR 106.12
 
 Worked example for one matched offer:
 
 - Your price: EUR 128.75
 - Competitor price: EUR 84.75
-- Feature-explained part of the gap: EUR 53.35
-- Residual part of the gap: EUR -9.35
+- Feature-explained part of the gap: EUR 52.35
+- Residual part of the gap: EUR -8.35
 
 ## Recommendation
 
@@ -59,7 +59,7 @@ Stavros Villas & Apartments is charging a clear premium that the measurable feat
 
 - Prices are EUR per night for a 2-guest Booking.com search. They are listed asking prices for available offers, not transacted prices or demand.
 - Large-party villa economics are not captured here, because every villa price was scraped at 2-guest occupancy.
-- The feature adjustment comes from a grouped cross-validated, gradient-boosted hedonic model (log R-squared about 54.0%, typical error about EUR 52.35 per night). Treat it as a directional adjustment, not an exact valuation.
+- The feature adjustment comes from a grouped cross-validated, gradient-boosted hedonic model (log R-squared about 53.3%, typical error about EUR 53.36 per night). Treat it as a directional adjustment, not an exact valuation.
 - The likely range shown against the feature-matched median is a split-conformal prediction band: it turns the model's own out-of-sample error into a plausible interval, so read the single figure as the middle of that range, not an exact number.
-- Comparable source table: `C:\Users\gabri\Documents\Projects\tourism_pricing_analytics\data\modelling\modelling_table.parquet`
+- Comparable source table: `data\modelling\modelling_table.parquet`
 - Hedonic training table: `data\modelling\hedonic_training_table.parquet`

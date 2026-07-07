@@ -18,6 +18,7 @@ from tourism_pricing_analytics.features.cancellation import cancellation_feature
 from tourism_pricing_analytics.features.encoders import (
     add_amenity_multi_hot,
     build_amenity_vocabulary,
+    is_room_size_token,
     multi_hot,
     normalize_amenity,
     ordinal_encode,
@@ -159,6 +160,33 @@ class EncoderTests(unittest.TestCase):
 
     def test_normalize_amenity_collapses_whitespace_and_case(self) -> None:
         self.assertEqual(normalize_amenity("  Free   WiFi "), "free wifi")
+
+    def test_is_room_size_token_matches_only_pure_size_measurements(self) -> None:
+        for token in ("25 m²", "35 m2", "160 m²", "9.5 m²", "  40  m²  "):
+            self.assertTrue(is_room_size_token(token), token)
+        for token in (
+            "Free WiFi",
+            "Balcony",
+            "Extra long beds (> 2 metres)",
+            "Terrace 20 m² view",  # size embedded in a longer amenity, not pure
+        ):
+            self.assertFalse(is_room_size_token(token), token)
+
+    def test_room_size_token_excluded_from_vocabulary(self) -> None:
+        # Booking exposes room size ("25 m²") as a facility row that rides along
+        # in the raw amenity list; it must not become an amenity vocab term.
+        vocab = build_amenity_vocabulary(
+            [
+                ["Entire apartment", "35 m²", "Balcony"],
+                ["27 m²", "Free WiFi"],
+            ]
+        )
+        self.assertEqual(vocab, ["balcony", "entire apartment", "free wifi"])
+
+    def test_multi_hot_ignores_room_size_tokens(self) -> None:
+        vocab = ["balcony", "free wifi"]
+        # A size token in the values must not accidentally match or error.
+        self.assertEqual(multi_hot(["35 m²", "Free WiFi"], vocab), [0, 1])
 
 
 class RoomNameIndexTests(unittest.TestCase):

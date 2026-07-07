@@ -15,7 +15,10 @@ from sklearn.metrics import mean_absolute_error, r2_score
 from sklearn.model_selection import GroupKFold
 
 from tourism_pricing_analytics.analysis.segment import segment_self_catering
-from tourism_pricing_analytics.features.encoders import normalize_amenity
+from tourism_pricing_analytics.features.encoders import (
+    is_room_size_token,
+    normalize_amenity,
+)
 from tourism_pricing_analytics.features.geo import (
     GEO_DISTANCE_FEATURES,
     add_location_features,
@@ -223,7 +226,14 @@ def _is_missing(value: object) -> bool:
 def _clean_token(value: object) -> str | None:
     if _is_missing(value):
         return None
-    text = normalize_amenity(str(value))
+    raw = str(value)
+    # Room-size measurements (e.g. "25 m²") ride along in Booking's raw amenity
+    # list but are captured separately as ``room_size_sqm``; keeping them here
+    # would create sparse per-size one-hot tokens redundant with that numeric
+    # feature and distort the hedonic fit and feature-adjustment.
+    if is_room_size_token(raw):
+        return None
+    text = normalize_amenity(raw)
     return text or None
 
 
@@ -1136,16 +1146,55 @@ def _rows_from_subject(subject: str | dict[str, Any] | pd.Series, frame: pd.Data
     return rows.loc[[order.index[0]]].copy()
 
 
+# The feature-adjustment counterfactual re-scores each peer as if it carried the
+# client's features. Swapping the client's *entire* sparse amenity/facility
+# token bundle into every peer pushes the tree off the training distribution and
+# lets a long tail of incidental, low-frequency binary flags compound into an
+# implausible adjustment (the observed +76% Stavros swing). We instead transfer
+# only the coherent, dense, high-signal features -- structured numerics,
+# subscores, location, property type, and the curated ``hq__`` quality flags --
+# and hold each peer's own sparse one-hots fixed.
+FEATURE_ADJUSTMENT_FACTOR_BOUNDS = (0.5, 2.0)
+
+
+def _adjustment_transfer_columns(meta: HedonicFeatureMeta) -> tuple[str, ...]:
+    """GBM feature columns whose value is taken from the client in the counterfactual.
+
+    Everything the model sees is transferred *except* the sparse per-token
+    ``amenity__``/``facility__`` one-hots, which stay at each peer's own value.
+    The curated ``hq__`` quality flags are retained because they are dense,
+    hand-picked, and coherent.
+    """
+
+    excluded: set[str] = set()
+    for token in meta.amenity_vocabulary:
+        excluded.add(_safe_feature_name("amenity__", token))
+    for token in meta.facility_vocabulary:
+        excluded.add(_safe_feature_name("facility__", token))
+    return tuple(column for column in meta.gbm_feature_columns if column not in excluded)
+
+
 def feature_adjusted_peer_prices(
     client: str | dict[str, Any] | pd.Series,
     peer_rows: pd.DataFrame,
     frame: pd.DataFrame,
     bundle: HedonicModelBundle,
+    *,
+    factor_bounds: tuple[float, float] | None = FEATURE_ADJUSTMENT_FACTOR_BOUNDS,
 ) -> pd.DataFrame:
-    """Return peer rows adjusted to the client's feature profile."""
+    """Return peer rows adjusted to the client's feature profile.
+
+    The adjustment is a curated counterfactual: each peer is re-scored with the
+    client's high-signal features (size, beds, star, review score/count,
+    subscores, location, property type, and curated ``hq__`` quality flags)
+    substituted in, while its own sparse amenity/facility one-hots are held
+    fixed. The resulting multiplier is clipped to ``factor_bounds`` as an
+    outlier guard against single-peer extrapolation (pass ``None`` to disable).
+    """
 
     if peer_rows.empty:
         return peer_rows.copy()
+    meta = bundle.feature_meta
     client_values = _profile_values(client, frame)
     client_like_rows = peer_rows.copy()
     for column, value in client_values.items():
@@ -1154,15 +1203,28 @@ def feature_adjusted_peer_prices(
         else:
             client_like_rows[column] = value
 
-    peer_predicted_log = predict_log_prices(bundle, peer_rows)
-    client_predicted_log = predict_log_prices(bundle, client_like_rows)
+    gbm_columns = list(meta.gbm_feature_columns)
+    X_peer, _, _, _ = build_design_matrix(peer_rows, feature_meta=meta)
+    X_client_like, _, _, _ = build_design_matrix(client_like_rows, feature_meta=meta)
+
+    # Peer baseline, then a counterfactual that copies only the curated columns
+    # from the fully-client-featured encoding onto the peer's own row.
+    X_counterfactual = X_peer.copy()
+    for column in _adjustment_transfer_columns(meta):
+        X_counterfactual[column] = X_client_like[column].to_numpy()
+
+    peer_predicted_log = bundle.gbm_model.predict(X_peer.loc[:, gbm_columns])
+    client_predicted_log = bundle.gbm_model.predict(X_counterfactual.loc[:, gbm_columns])
+    factor = np.exp(client_predicted_log - peer_predicted_log)
+    if factor_bounds is not None:
+        factor = np.clip(factor, factor_bounds[0], factor_bounds[1])
+
     adjusted = peer_rows.copy()
     adjusted["predicted_peer_price_per_night"] = np.exp(peer_predicted_log)
     adjusted["predicted_client_like_price_per_night"] = np.exp(client_predicted_log)
-    adjusted["feature_adjustment_factor"] = np.exp(client_predicted_log - peer_predicted_log)
+    adjusted["feature_adjustment_factor"] = factor
     adjusted["feature_adjusted_price_per_night"] = (
-        pd.to_numeric(adjusted["price_per_night"], errors="coerce")
-        * adjusted["feature_adjustment_factor"]
+        pd.to_numeric(adjusted["price_per_night"], errors="coerce").to_numpy() * factor
     )
     return adjusted
 

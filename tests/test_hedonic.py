@@ -141,6 +141,29 @@ class HedonicDesignMatrixTests(unittest.TestCase):
         self.assertNotIn("latitude", meta.ols_feature_columns)
         self.assertIn("latitude", meta.gbm_feature_columns)
 
+    def test_room_size_tokens_do_not_leak_into_amenity_vocabulary(self) -> None:
+        # Regression: Booking exposes room size ("35 m²") as a room facility row
+        # that rides along in the raw amenity list. It is captured as
+        # room_size_sqm and must not become a sparse amenity one-hot bucket that
+        # the model reads as a price signal.
+        frame = sample_hedonic_frame()
+        frame["amenities"] = [
+            ["Kitchen", "Balcony", "35 m²", "Sea view"] for _ in range(len(frame))
+        ]
+        X, _, _, meta = build_design_matrix(frame, min_token_frequency=1)
+
+        self.assertNotIn("35 m²", meta.amenity_vocabulary)
+        size_tokens = [tok for tok in meta.amenity_vocabulary if tok[0].isdigit()]
+        self.assertEqual(size_tokens, [])
+        size_columns = [
+            col
+            for col in X.columns
+            if col.startswith("amenity__") and any(ch.isdigit() for ch in col)
+        ]
+        self.assertEqual(size_columns, [])
+        # Real amenities alongside the size token are preserved.
+        self.assertIn("amenity__kitchen", X.columns)
+
     def test_group_kfold_never_splits_one_property_across_train_and_test(self) -> None:
         _, _, groups, _ = build_design_matrix(sample_hedonic_frame(), min_token_frequency=1)
         for train_idx, test_idx in group_kfold_splits(groups, n_splits=3):
@@ -171,6 +194,36 @@ class HedonicModelTests(unittest.TestCase):
             explanation["feature_explained_gap"] + explanation["residual_gap"],
         )
         json.dumps(explanation, sort_keys=True)
+
+    def test_adjustment_ignores_sparse_tokens_and_clips_factor(self) -> None:
+        # Regression: the feature-adjustment must not move a peer just because
+        # the client owns a different bundle of incidental sparse amenity/
+        # facility tokens. Only curated high-signal features may drive it.
+        frame = sample_hedonic_frame()
+        bundle = fit_hedonic_models(frame, min_token_frequency=1)
+        peer_rows = frame.loc[frame["property_url"] == "near"].copy()
+
+        # A client identical to the peer on every curated feature but carrying a
+        # wildly different sparse-token bundle should adjust by ~1x.
+        client = peer_rows.iloc[0].copy()
+        client["property_url"] = "synthetic-client"
+        client["amenities"] = ["Kitchen", "Balcony", "Hot tub", "Sauna", "Piano"]
+        client["property_facilities"] = ["Free WiFi", "Parking", "Nightclub", "Casino"]
+
+        adjusted = feature_adjusted_peer_prices(client, peer_rows, frame, bundle)
+        factors = adjusted["feature_adjustment_factor"]
+        for factor in factors:
+            self.assertAlmostEqual(factor, 1.0, places=6)
+
+        # The clip bounds the multiplier even for an extreme profile difference.
+        extreme = peer_rows.iloc[0].copy()
+        extreme["property_url"] = "extreme-client"
+        extreme["room_size_sqm"] = 500.0
+        extreme["star_rating"] = 5.0
+        extreme["review_score"] = 9.9
+        clipped = feature_adjusted_peer_prices(extreme, peer_rows, frame, bundle)
+        self.assertLessEqual(clipped["feature_adjustment_factor"].max(), 2.0)
+        self.assertGreaterEqual(clipped["feature_adjustment_factor"].min(), 0.5)
 
     def test_hedonic_report_renders(self) -> None:
         payload = build_report_payload(
