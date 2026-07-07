@@ -1174,6 +1174,34 @@ def _adjustment_transfer_columns(meta: HedonicFeatureMeta) -> tuple[str, ...]:
     return tuple(column for column in meta.gbm_feature_columns if column not in excluded)
 
 
+def _curated_counterfactual_matrices(
+    target_rows: pd.DataFrame,
+    client_values: dict[str, Any],
+    meta: HedonicFeatureMeta,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Design matrices for ``target_rows`` as-is and re-featured to the client.
+
+    The counterfactual copies only the curated high-signal columns from a
+    fully-client-featured encoding onto each target row; the sparse
+    ``amenity__``/``facility__`` one-hots stay at the target's own value. This
+    is the single mechanic shared by the peer benchmark and the gap split.
+    """
+
+    client_like_rows = target_rows.copy()
+    for column, value in client_values.items():
+        if isinstance(value, (list, tuple, dict, set, frozenset)):
+            client_like_rows[column] = [value] * len(client_like_rows)
+        else:
+            client_like_rows[column] = value
+
+    X_target, _, _, _ = build_design_matrix(target_rows, feature_meta=meta)
+    X_client_like, _, _, _ = build_design_matrix(client_like_rows, feature_meta=meta)
+    X_counterfactual = X_target.copy()
+    for column in _adjustment_transfer_columns(meta):
+        X_counterfactual[column] = X_client_like[column].to_numpy()
+    return X_target, X_counterfactual
+
+
 def feature_adjusted_peer_prices(
     client: str | dict[str, Any] | pd.Series,
     peer_rows: pd.DataFrame,
@@ -1195,23 +1223,9 @@ def feature_adjusted_peer_prices(
     if peer_rows.empty:
         return peer_rows.copy()
     meta = bundle.feature_meta
-    client_values = _profile_values(client, frame)
-    client_like_rows = peer_rows.copy()
-    for column, value in client_values.items():
-        if isinstance(value, (list, tuple, dict, set, frozenset)):
-            client_like_rows[column] = [value] * len(client_like_rows)
-        else:
-            client_like_rows[column] = value
-
     gbm_columns = list(meta.gbm_feature_columns)
-    X_peer, _, _, _ = build_design_matrix(peer_rows, feature_meta=meta)
-    X_client_like, _, _, _ = build_design_matrix(client_like_rows, feature_meta=meta)
-
-    # Peer baseline, then a counterfactual that copies only the curated columns
-    # from the fully-client-featured encoding onto the peer's own row.
-    X_counterfactual = X_peer.copy()
-    for column in _adjustment_transfer_columns(meta):
-        X_counterfactual[column] = X_client_like[column].to_numpy()
+    client_values = _profile_values(client, frame)
+    X_peer, X_counterfactual = _curated_counterfactual_matrices(peer_rows, client_values, meta)
 
     peer_predicted_log = bundle.gbm_model.predict(X_peer.loc[:, gbm_columns])
     client_predicted_log = bundle.gbm_model.predict(X_counterfactual.loc[:, gbm_columns])
@@ -1234,56 +1248,97 @@ def explain_price_gap(
     competitor: str | dict[str, Any] | pd.Series,
     frame: pd.DataFrame | None = None,
     bundle: HedonicModelBundle | None = None,
+    *,
+    factor_bounds: tuple[float, float] | None = FEATURE_ADJUSTMENT_FACTOR_BOUNDS,
 ) -> dict[str, Any]:
-    """Split an observed price gap into feature-explained and residual parts."""
+    """Split an observed price gap into feature-explained and residual parts.
+
+    Uses the same curated counterfactual as ``feature_adjusted_peer_prices``:
+    the competitor is re-scored with the client's high-signal features, and the
+    resulting price move is the feature-explained portion of the gap. Only
+    curated features can move it, so a difference in incidental sparse
+    amenity/facility tokens no longer masquerades as "explained".
+    """
 
     if bundle is None:
         if frame is None:
             raise HedonicModelError("Either frame+bundle or frame alone is required")
         bundle = fit_hedonic_models(frame)
 
+    meta = bundle.feature_meta
+    gbm_columns = list(meta.gbm_feature_columns)
     client_row = _rows_from_subject(client, frame)
     competitor_row = _rows_from_subject(competitor, frame)
-    rows = pd.concat([client_row, competitor_row], ignore_index=True)
-    predicted_prices = predict_prices(bundle, rows)
-    observed_prices = pd.to_numeric(rows["price_per_night"], errors="coerce")
-    if observed_prices.isna().any():
+
+    client_observed = _numeric_or_none(client_row["price_per_night"].iloc[0])
+    competitor_observed = _numeric_or_none(competitor_row["price_per_night"].iloc[0])
+    if client_observed is None or competitor_observed is None:
         raise HedonicModelError("Both client and competitor rows need price_per_night")
 
-    observed_gap = float(observed_prices.iloc[0] - observed_prices.iloc[1])
-    feature_explained_gap = float(predicted_prices.iloc[0] - predicted_prices.iloc[1])
+    client_values = _profile_values(client, frame)
+    X_comp, X_comp_as_client = _curated_counterfactual_matrices(
+        competitor_row, client_values, meta
+    )
+    competitor_predicted_log = bundle.gbm_model.predict(X_comp.loc[:, gbm_columns])[0]
+    competitor_as_client_log = bundle.gbm_model.predict(X_comp_as_client.loc[:, gbm_columns])[0]
+
+    factor = float(np.exp(competitor_as_client_log - competitor_predicted_log))
+    if factor_bounds is not None:
+        factor = float(np.clip(factor, factor_bounds[0], factor_bounds[1]))
+
+    observed_gap = client_observed - competitor_observed
+    # The competitor's price moved to the client's curated quality level: the
+    # part of the gap that measurable features explain.
+    feature_explained_gap = competitor_observed * (factor - 1.0)
     residual_gap = observed_gap - feature_explained_gap
     return {
-        "client_price_per_night": float(observed_prices.iloc[0]),
-        "competitor_price_per_night": float(observed_prices.iloc[1]),
+        "client_price_per_night": client_observed,
+        "competitor_price_per_night": competitor_observed,
         "observed_gap": observed_gap,
         "feature_explained_gap": feature_explained_gap,
         "residual_gap": residual_gap,
-        "client_predicted_price_per_night": float(predicted_prices.iloc[0]),
-        "competitor_predicted_price_per_night": float(predicted_prices.iloc[1]),
-        "top_feature_contributions_log_points": _shap_gap_contributions(bundle, rows),
+        "client_predicted_price_per_night": float(
+            np.exp(predict_log_prices(bundle, client_row).iloc[0])
+        ),
+        "competitor_predicted_price_per_night": float(np.exp(competitor_predicted_log)),
+        "feature_adjustment_factor": factor,
+        "top_feature_contributions_log_points": _shap_gap_contributions(
+            bundle, X_comp_as_client, X_comp, _adjustment_transfer_columns(meta)
+        ),
     }
 
 
 def _shap_gap_contributions(
     bundle: HedonicModelBundle,
-    rows: pd.DataFrame,
+    X_high: pd.DataFrame,
+    X_low: pd.DataFrame,
+    columns: tuple[str, ...],
     *,
     limit: int = 10,
 ) -> list[dict[str, float | str]]:
+    """Per-feature SHAP contribution to ``pred(X_high[0]) - pred(X_low[0])``.
+
+    Restricted to ``columns`` (the curated transfer set) so the reported drivers
+    describe the same counterfactual the gap split is built from, not the
+    incidental sparse tokens that are held fixed between the two rows.
+    """
+
+    gbm_columns = list(bundle.feature_meta.gbm_feature_columns)
     try:
         import shap
 
-        X, _, _, _ = build_design_matrix(rows, feature_meta=bundle.feature_meta)
         explainer = shap.TreeExplainer(bundle.gbm_model)
-        values = explainer.shap_values(X.loc[:, list(bundle.feature_meta.gbm_feature_columns)])
-        difference = np.asarray(values[0]) - np.asarray(values[1])
+        high_values = np.asarray(explainer.shap_values(X_high.loc[:, gbm_columns]))
+        low_values = np.asarray(explainer.shap_values(X_low.loc[:, gbm_columns]))
+        difference = high_values[0] - low_values[0]
     except Exception:
         return []
 
+    curated = set(columns)
     records = [
         {"feature": feature, "contribution_log_points": float(value)}
-        for feature, value in zip(bundle.feature_meta.gbm_feature_columns, difference)
+        for feature, value in zip(gbm_columns, difference)
+        if feature in curated
     ]
     records.sort(key=lambda item: abs(float(item["contribution_log_points"])), reverse=True)
     return records[:limit]

@@ -54,6 +54,6 @@ Price unit: EUR/night for a 2-guest Booking.com search. The model explains liste
 - Client observed price: EUR 128.75
 - Competitor observed price: EUR 84.75
 - Observed gap: EUR 44.00
-- Feature-explained gap: EUR 52.35
-- Residual gap: EUR -8.35
+- Feature-explained gap: EUR 4.54
+- Residual gap: EUR 39.46
 

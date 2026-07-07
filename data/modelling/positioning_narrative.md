@@ -48,8 +48,8 @@ Worked example for one matched offer:
 
 - Your price: EUR 128.75
 - Competitor price: EUR 84.75
-- Feature-explained part of the gap: EUR 52.35
-- Residual part of the gap: EUR -8.35
+- Feature-explained part of the gap: EUR 4.54
+- Residual part of the gap: EUR 39.46
 
 ## Recommendation
 
