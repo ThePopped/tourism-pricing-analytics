@@ -324,6 +324,12 @@ python scripts\append_price_observations.py --latest
 python scripts\run_dashboard.py
 ```
 
+To run the daily price-only scrape with 4 workers:
+
+```powershell
+python scripts\run_full_scrape.py --mode price-only --workers 4
+```
+
 - The scrape writes generated run artifacts under `saved_dom/runs/<timestamp>/`.
   Price-only mode skips room inventory when a fresh stable source is available;
   otherwise it automatically runs full mode.
@@ -410,7 +416,9 @@ Run the production sharded scraper:
 
 ```powershell
 python scripts\run_full_scrape.py
+python scripts\run_full_scrape.py --workers 4
 python scripts\run_full_scrape.py --mode price-only
+python scripts\run_full_scrape.py --mode price-only --workers 4
 python scripts\run_full_scrape.py --limit 100 --batch-per-worker 2
 ```
 

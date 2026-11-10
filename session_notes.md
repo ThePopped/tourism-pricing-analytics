@@ -9,7 +9,9 @@ July 5 full run and the hedonic feature-adjustment was hardened (see the Hedonic
 Data-Quality Fix section below). The scraper scale roadmap is also implemented
 through the daily price-only upgrade:
 
-- Full scrape default remains 8 workers, headless, `--batch-per-worker 1`.
+- Production code default remains 8 workers, headless, `--batch-per-worker 1`,
+  but Codex/operator launches on this host should explicitly use `--workers 4`
+  unless the user asks for a different worker count.
 - `scripts/run_full_scrape.py` now uses a dynamic worker queue instead of a
   round barrier.
 - `--batch-per-worker 2` is supported as an explicit benchmark path, not the
@@ -130,9 +132,9 @@ Controlled A/B on 2026-07-05: identical first-100-property slice (`--limit 100`)
 
 Findings:
 
-- 8-worker headless is the default: fastest overall, lighter on RAM, and
-  challenge-clean.
-- Drop to 4 workers only when RAM is tight.
+- 8-worker headless was the fastest A/B arm, but current host memory is tight;
+  for Codex/operator production launches, use `--workers 4` explicitly unless
+  the user asks otherwise.
 - Do not use 12 workers on this host; contention erases the parallelism gain.
 - Use headed only for targeted client-critical completeness checks.
 
@@ -173,9 +175,14 @@ overall or missing current/previous subject/peer medians for the selected window
 
 ## Operating Recommendations
 
-- Default full/pilot run: `python scripts\run_full_scrape.py`.
+- Default full/pilot run for Codex/operator use on this host:
+  `python scripts\run_full_scrape.py --workers 4`.
+- Do not launch a bare `python scripts\run_full_scrape.py` production scrape
+  unless the user explicitly asks for the code default worker count.
 - Daily price scrape: `python scripts\run_full_scrape.py --mode price-only`.
 - Live Booking.com scrapes must be run outside Codex sandboxed network access.
+  Request/use unsandboxed execution from the start; do not first attempt a live
+  Booking.com scrape inside the sandbox.
   Sandboxed runs fail with Chromium `net::ERR_NETWORK_ACCESS_DENIED`, produce
   redirect-classified failures, and contaminate the run directory.
 - Benchmark batch size 2 with a controlled pilot before adopting it:
