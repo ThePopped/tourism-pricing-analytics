@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -56,9 +57,35 @@ def _first_present(row: dict, names: tuple[str, ...], default: object) -> object
     return default
 
 
-def _snapshot_date_for_row(row: dict, run_id: str) -> object:
+def run_snapshot_date(run_dir: Path) -> str | None:
+    """Return the run's search base date, the date every window was keyed from.
+
+    A run that starts late in the evening keeps scraping past midnight, so the
+    per-row ``captured_at`` date would split one run across two snapshots and
+    mix its tail into the next day's run. The base date in ``run_metadata.json``
+    is fixed for the whole run, so it is the snapshot identity when present.
+    """
+
+    metadata_path = run_dir / "run_metadata.json"
+    if not metadata_path.exists():
+        return None
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    value = metadata.get("search_base_date") if isinstance(metadata, dict) else None
+    return value or None
+
+
+def _snapshot_date_for_row(
+    row: dict,
+    run_id: str,
+    run_snapshot: object | None = None,
+) -> object:
     if row.get("snapshot_date") is not None:
         return row["snapshot_date"]
+    if run_snapshot is not None:
+        return run_snapshot
     if row.get("captured_at") is not None:
         return row["captured_at"]
     return run_id[:8]
@@ -126,6 +153,7 @@ def observation_rows_from_features(
     *,
     run_id: str,
     property_context: dict[str, dict[str, object]] | None = None,
+    snapshot_date: object | None = None,
     adults: int = 2,
     children: int = 0,
     rooms: int = 1,
@@ -138,7 +166,7 @@ def observation_rows_from_features(
     rows: list[dict[str, object]] = []
     for row in feature_rows:
         observation = {
-            "snapshot_date": _snapshot_date_for_row(row, run_id),
+            "snapshot_date": _snapshot_date_for_row(row, run_id, snapshot_date),
             "captured_at": row.get("captured_at"),
             "run_id": row.get("run_id") or run_id,
             "property_url": row.get("property_url"),
@@ -179,6 +207,7 @@ def presence_rows_from_run_records(
     *,
     run_id: str,
     property_context: dict[str, dict[str, object]] | None = None,
+    snapshot_date: object | None = None,
     adults: int = 2,
     children: int = 0,
     rooms: int = 1,
@@ -192,7 +221,7 @@ def presence_rows_from_run_records(
 
     for row in feature_rows:
         presence = {
-            "snapshot_date": _snapshot_date_for_row(row, run_id),
+            "snapshot_date": _snapshot_date_for_row(row, run_id, snapshot_date),
             "captured_at": row.get("captured_at"),
             "run_id": row.get("run_id") or run_id,
             "property_url": row.get("property_url"),
@@ -223,7 +252,7 @@ def presence_rows_from_run_records(
             else AVAILABILITY_STATUS_FAILED
         )
         presence = {
-            "snapshot_date": _snapshot_date_for_row(row, run_id),
+            "snapshot_date": _snapshot_date_for_row(row, run_id, snapshot_date),
             "captured_at": row.get("captured_at"),
             "run_id": row.get("run_id") or run_id,
             "property_url": row.get("property_url"),
@@ -270,6 +299,7 @@ def build_price_observations_from_run(
         feature_rows,
         run_id=run_dir.name,
         property_context=property_context,
+        snapshot_date=run_snapshot_date(run_dir),
         adults=adults,
         children=children,
         rooms=rooms,
@@ -299,6 +329,7 @@ def build_offer_presence_from_run(
         failure_rows,
         run_id=run_dir.name,
         property_context=property_context,
+        snapshot_date=run_snapshot_date(run_dir),
         adults=adults,
         children=children,
         rooms=rooms,
@@ -430,6 +461,7 @@ def append_history_from_run(
         feature_rows,
         run_id=run_dir.name,
         property_context=property_context,
+        snapshot_date=run_snapshot_date(run_dir),
         adults=adults,
         children=children,
         rooms=rooms,
@@ -441,6 +473,7 @@ def append_history_from_run(
         _load_optional_jsonl(run_dir, "failures.jsonl"),
         run_id=run_dir.name,
         property_context=property_context,
+        snapshot_date=run_snapshot_date(run_dir),
         adults=adults,
         children=children,
         rooms=rooms,

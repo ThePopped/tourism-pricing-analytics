@@ -637,6 +637,78 @@ class AppendOfferPresenceTests(unittest.TestCase):
         self.assertEqual(observation_rows, 1)
         self.assertEqual(presence_rows, 1)
 
+    def test_run_crossing_midnight_stays_in_one_snapshot_keyed_on_base_date(self) -> None:
+        # Regression: a run launched at 23:00 kept scraping past midnight and its
+        # post-midnight rows were filed under the next day's snapshot.
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            run_dir = tmp_path / "20260709_230008_000000"
+            create_synthetic_run(run_dir, captured_at="2026-07-09T23:10:00", price=500.0)
+            late_row = json.loads(
+                (run_dir / "price_rows.jsonl").read_text(encoding="utf-8").splitlines()[0]
+            )
+            late_row.update(
+                captured_at="2026-07-10T01:30:00",
+                room_id="102",
+                room_name="Garden Studio",
+                block_id="102_2026-07-15_2026-07-19",
+            )
+            with (run_dir / "price_rows.jsonl").open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(late_row) + "\n")
+            write_jsonl(
+                run_dir / "failures.jsonl",
+                [
+                    {
+                        "property_name": "Apartment Two",
+                        "property_url": "https://example.test/apartment-two",
+                        "checkin": "2026-07-15",
+                        "checkout": "2026-07-19",
+                        "lead_time_days": 15,
+                        "stay_length_days": 4,
+                        "scrape_stage": "price_rows",
+                        "category": "empty_availability",
+                        "captured_at": "2026-07-10T02:00:00",
+                    }
+                ],
+            )
+            (run_dir / "run_metadata.json").write_text(
+                json.dumps({"search_base_date": "2026-07-09"}), encoding="utf-8"
+            )
+
+            observations = build_price_observations_from_run(run_dir)
+            presence = build_offer_presence_from_run(run_dir)
+
+        self.assertEqual(len(observations), 2)
+        self.assertEqual(set(observations["snapshot_date"]), {pd.Timestamp("2026-07-09")})
+        self.assertEqual(len(presence), 2)
+        self.assertEqual(set(presence["snapshot_date"]), {pd.Timestamp("2026-07-09")})
+        # captured_at is preserved verbatim for audit even though snapshot is pinned.
+        self.assertIn(pd.Timestamp("2026-07-10T01:30:00"), set(observations["captured_at"]))
+
+    def test_run_without_metadata_falls_back_to_captured_at_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "20260621_220852_000000"
+            create_synthetic_run(run_dir, captured_at="2026-06-21T22:10:04", price=500.0)
+
+            frame = build_price_observations_from_run(run_dir)
+
+        self.assertEqual(frame.loc[0, "snapshot_date"], pd.Timestamp("2026-06-21"))
+
+    def test_explicit_row_snapshot_date_wins_over_run_base_date(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "20260709_230008_000000"
+            create_synthetic_run(run_dir, captured_at="2026-07-09T23:10:00", price=500.0)
+            row = json.loads((run_dir / "price_rows.jsonl").read_text(encoding="utf-8"))
+            row["snapshot_date"] = "2026-07-08"
+            write_jsonl(run_dir / "price_rows.jsonl", [row])
+            (run_dir / "run_metadata.json").write_text(
+                json.dumps({"search_base_date": "2026-07-09"}), encoding="utf-8"
+            )
+
+            frame = build_price_observations_from_run(run_dir)
+
+        self.assertEqual(frame.loc[0, "snapshot_date"], pd.Timestamp("2026-07-08"))
+
     def test_append_history_from_failure_only_run_records_presence_without_prices(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
